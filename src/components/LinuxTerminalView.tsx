@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Terminal, Download, Copy, Check, Server, FileCode, Play, Trash2, ArrowRight, Github, Coins } from 'lucide-react';
+import { Terminal, Download, Copy, Check, Server, FileCode, Play, Trash2, ArrowRight, Github, Coins, Zap, ShieldAlert, Cpu } from 'lucide-react';
 import { TerminalLine } from '../types';
 import { REAL_BTC_MINER_SCRIPT } from '../realBtcMinerScript';
+import { FAST_MINER_PY_SCRIPT, FAST_MINER_C_SCRIPT } from '../fastMinerScripts';
 
 interface LinuxTerminalViewProps {
   terminalLogs: TerminalLine[];
@@ -10,66 +11,96 @@ interface LinuxTerminalViewProps {
   onToggleMining: () => void;
 }
 
-const DIRECT_NO_PASSWORD_CMD = `mkdir -p ~/btc-miner && cd ~/btc-miner && cat << 'EOF' > miner.py
-import socket, json, hashlib, time, binascii, sys, struct, threading
+const FAST_MULTICORE_CMD = `mkdir -p ~/btc-miner && cd ~/btc-miner && cat << 'EOF' > fast_miner.py
+import socket, json, hashlib, time, binascii, sys, struct, multiprocessing, os
+
 WALLET = sys.argv[1] if len(sys.argv) > 1 else "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
-def dbl_sha256(b): return hashlib.sha256(hashlib.sha256(b).digest()).digest()
-def shrink(c8): return format(int(c8[:4], 16) ^ int(c8[4:], 16), '04x')
-def compress(h): return "".join(shrink(h[i:i+8]) for i in range(0, len(h), 8))
+HOST, PORT = "solo.ckpool.org", 3333
+
+def d_sha(b): return hashlib.sha256(hashlib.sha256(b).digest()).digest()
 def get_target(nb): n = int(nb, 16); return (n & 0xffffff) * (2 ** (8 * ((n >> 24) - 3)))
-print(f"[*] Connecting to Bitcoin Mining Pool (solo.ckpool.org:3333) for: {WALLET}")
-s = socket.socket(); s.connect(("solo.ckpool.org", 3333))
-s.sendall(b'{"id":1,"method":"mining.subscribe","params":["miner/1.0"]}\\n')
-sub = json.loads(s.recv(4096).decode().split("\\n")[0])["result"]
-e1, e2s = sub[1], int(sub[2])
-s.sendall(f'{{"id":2,"method":"mining.authorize","params":["{WALLET}.worker1","x"]}}\\n'.encode())
-print(f"[✓] Connected & Authorized! Mining live Bitcoin blocks...")
-job, pool_target = None, int(0x00000000ffff0000000000000000000000000000000000000000000000000000 / 1000)
-def miner_loop():
-    global job, pool_target
-    en2, hashes, t0 = 0, 0, time.time()
+
+def worker(cid, cores, jq, sq, cnt):
+    cur_id, pfx, pt, nt, en2, nt_hex = None, b"", 0, 0, "", ""
+    nonce = cid
+    loc = 0
+    p = struct.pack
+    fb = int.from_bytes
     while True:
-        if not job: time.sleep(0.05); continue
-        cur = dict(job)
-        en2_hex = format(en2, f"0{e2s*2}x")
-        cb = binascii.unhexlify(cur["cb1"] + e1 + en2_hex + cur["cb2"])
-        mr = dbl_sha256(cb)
-        for b in cur["branches"]: mr = dbl_sha256(mr + binascii.unhexlify(b))
-        pfx = binascii.unhexlify(cur["v"])[::-1] + b"".join(binascii.unhexlify(cur["prev"])[i:i+4][::-1] for i in range(0, 32, 4)) + mr + binascii.unhexlify(cur["nt"])[::-1] + binascii.unhexlify(cur["nb"])[::-1]
-        for nonce in range(0, 0xffffffff):
-            if not job or job.get("id") != cur["id"]: break
-            h = dbl_sha256(pfx + struct.pack("<I", nonce))
-            h_int = int.from_bytes(h, "big")
-            h_hex = binascii.hexlify(h[::-1]).decode()
-            comp = compress(h_hex)
-            if h_int <= pool_target:
-                print(f"\\n[$$$] REAL BTC SHARE! Nonce: {hex(nonce)} | Hash: {h_hex}")
-                s.sendall(f'{{"id":3,"method":"mining.submit","params":["{WALLET}.worker1","{cur["id"]}","{en2_hex}","{cur["nt"]}","{format(nonce,"08x")}"]}}\\n'.encode())
-            if h_int <= cur["net_target"]:
-                print(f"\\n[🚨 JACKPOT! 🚨] SOLVED FULL BITCOIN BLOCK! Hash: {h_hex}")
-            hashes += 1
-            if hashes % 50000 == 0:
-                el = max(0.001, time.time() - t0)
-                sys.stdout.write(f"\\r[-] Mining: {hashes:,} nonces ({(hashes/el)/1000:.1f} kH/s) | Compressed: {comp[:8]}... ")
-                sys.stdout.flush()
-        en2 += 1
-threading.Thread(target=miner_loop, daemon=True).start()
-buf = ""
-while True:
-    buf += s.recv(4096).decode()
-    while "\\n" in buf:
-        line, buf = buf.split("\\n", 1)
-        if not line.strip(): continue
-        m = json.loads(line)
-        if m.get("method") == "mining.notify":
-            p = m["params"]
-            job = {"id": p[0], "prev": p[1], "cb1": p[2], "cb2": p[3], "branches": p[4], "v": p[5], "nb": p[6], "nt": p[7], "net_target": get_target(p[6])}
-            print(f"\\n[+] New live Bitcoin block template received! Job ID: {p[0]}")
+        while not jq.empty():
+            try:
+                j = jq.get_nowait()
+                cur_id, pfx, pt, nt, en2, nt_hex = j["id"], j["pfx"], j["pt"], j["nt"], j["en2"], j["nt_hex"]
+                nonce = cid
+            except: pass
+        if not cur_id or not pfx:
+            time.sleep(0.02); continue
+        bend = nonce + (50000 * cores)
+        while nonce < bend:
+            hb = d_sha(pfx + p("<I", nonce))
+            hint = fb(hb, "big")
+            if hint <= pt:
+                sq.put({"core": cid, "id": cur_id, "en2": en2, "nt": nt_hex, "nonce": format(nonce, "08x"), "h": binascii.hexlify(hb[::-1]).decode(), "blk": hint <= nt})
+            nonce += cores
+            loc += 1
+        with cnt.get_lock(): cnt.value += loc
+        loc = 0
+
+if __name__ == "__main__":
+    cores = os.cpu_count() or 4
+    print(f"[*] Starting Multi-Core Bitcoin Miner on {cores} CPU Cores for: {WALLET}")
+    s = socket.socket(); s.connect((HOST, PORT))
+    s.sendall(b'{"id":1,"method":"mining.subscribe","params":["fast/1.0"]}\\n')
+    sub = json.loads(s.recv(4096).decode().split("\\n")[0])["result"]
+    e1, e2s = sub[1], int(sub[2])
+    s.sendall(f'{{"id":2,"method":"mining.authorize","params":["{WALLET}.multicore","x"]}}\\n'.encode())
+    print(f"[✓] Connected & Authorized to {HOST}:{PORT}! All {cores} CPU cores active!")
+    jqs = [multiprocessing.Queue() for _ in range(cores)]
+    sq = multiprocessing.Queue()
+    cnt = multiprocessing.Value('q', 0)
+    for i in range(cores):
+        multiprocessing.Process(target=worker, args=(i, cores, jqs[i], sq, cnt), daemon=True).start()
+    pt = int(0x00000000ffff0000000000000000000000000000000000000000000000000000 / 1000)
+    s.setblocking(False)
+    buf, t0, en2 = "", time.time(), 0
+    while True:
+        try:
+            d = s.recv(4096).decode()
+            if d:
+                buf += d
+                while "\\n" in buf:
+                    l, buf = buf.split("\\n", 1)
+                    if not l.strip(): continue
+                    m = json.loads(l)
+                    if m.get("method") == "mining.notify":
+                        p_ = m["params"]
+                        jid, prev, cb1, cb2, br, v, nb, nt = p_[0], p_[1], p_[2], p_[3], p_[4], p_[5], p_[6], p_[7]
+                        en2_hex = format(en2, f"0{e2s*2}x")
+                        cb = binascii.unhexlify(cb1 + e1 + en2_hex + cb2)
+                        mr = d_sha(cb)
+                        for b in br: mr = d_sha(mr + binascii.unhexlify(b))
+                        pfx = binascii.unhexlify(v)[::-1] + b"".join(binascii.unhexlify(prev)[i:i+4][::-1] for i in range(0, 32, 4)) + mr + binascii.unhexlify(nt)[::-1] + binascii.unhexlify(nb)[::-1]
+                        for q in jqs: q.put({"id": jid, "pfx": pfx, "pt": pt, "nt": get_target(nb), "en2": en2_hex, "nt_hex": nt})
+                        en2 += 1
+                        print(f"\\n[+] Live Block Template: Job {jid}")
+        except BlockingIOError: pass
+        except Exception: pass
+        while not sq.empty():
+            sh = sq.get_nowait()
+            if sh["blk"]: print(f"\\n[🚨 JACKPOT! 🚨] SOLVED FULL BITCOIN BLOCK! Hash: {sh['h']}")
+            else: print(f"\\n[$$$] VALID SHARE FOUND by Core #{sh['core']}! Nonce: {sh['nonce']}")
+            s.sendall(f'{{"id":4,"method":"mining.submit","params":["{WALLET}.multicore","{sh["id"]}","{sh["en2"]}","{sh["nt"]}","{sh["nonce"]}"]}}\\n'.encode())
+        el = max(0.001, time.time() - t0)
+        with cnt.get_lock(): tot = cnt.value
+        sys.stdout.write(f"\\r[-] Hashes: {tot:,} | Speed: {(tot/el)/1000:.1f} kH/s across {cores} cores ")
+        sys.stdout.flush()
+        time.sleep(0.1)
 EOF
-python3 miner.py`;
+python3 fast_miner.py`;
 
 const GITHUB_ONE_START_CMD = `git clone https://github.com/jayomer1234/btc-miner.git && ./btc-miner/start.sh`;
 const LOCAL_ONE_START_CMD = `./start.sh`;
+const GCC_C_MINER_CMD = `gcc -O3 -march=native -pthread fast_miner.c -o fast_c_miner && ./fast_c_miner`;
 const GITHUB_COMPRESSED_CMD = `git clone https://github.com/jayomer1234/btc-miner.git && cd btc-miner && ./install.sh && python3 compressed_miner.py`;
 
 const PYTHON_SCRIPT_CODE = `#!/usr/bin/env python3
@@ -178,7 +209,7 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
   onToggleMining,
 }) => {
   const [activeTab, setActiveTab] = useState<'console' | 'script' | 'linux-guide'>('console');
-  const [selectedScriptType, setSelectedScriptType] = useState<'real' | 'compressed'>('real');
+  const [selectedScriptType, setSelectedScriptType] = useState<'fast_py' | 'fast_c' | 'real' | 'compressed'>('fast_py');
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -189,8 +220,18 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
     }
   }, [terminalLogs, activeTab]);
 
-  const activeScriptCode = selectedScriptType === 'real' ? REAL_BTC_MINER_SCRIPT : PYTHON_SCRIPT_CODE;
-  const activeScriptFilename = selectedScriptType === 'real' ? 'real_btc_miner.py' : 'compressed_miner.py';
+  let activeScriptCode = FAST_MINER_PY_SCRIPT;
+  let activeScriptFilename = 'fast_miner.py';
+  if (selectedScriptType === 'fast_c') {
+    activeScriptCode = FAST_MINER_C_SCRIPT;
+    activeScriptFilename = 'fast_miner.c';
+  } else if (selectedScriptType === 'real') {
+    activeScriptCode = REAL_BTC_MINER_SCRIPT;
+    activeScriptFilename = 'real_btc_miner.py';
+  } else if (selectedScriptType === 'compressed') {
+    activeScriptCode = PYTHON_SCRIPT_CODE;
+    activeScriptFilename = 'compressed_miner.py';
+  }
 
   const handleCopyScript = () => {
     navigator.clipboard.writeText(activeScriptCode);
@@ -205,7 +246,8 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
   };
 
   const handleDownloadScript = () => {
-    const blob = new Blob([activeScriptCode], { type: 'text/x-python;charset=utf-8' });
+    const mimeType = selectedScriptType === 'fast_c' ? 'text/x-csrc;charset=utf-8' : 'text/x-python;charset=utf-8';
+    const blob = new Blob([activeScriptCode], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -322,7 +364,29 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
         {activeTab === 'script' && (
           <div className="space-y-3">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-              <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-lg border border-slate-800">
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                <button
+                  onClick={() => setSelectedScriptType('fast_py')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'fast_py'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>fast_miner.py (Multi-Core)</span>
+                </button>
+                <button
+                  onClick={() => setSelectedScriptType('fast_c')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'fast_c'
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5 text-purple-400" />
+                  <span>fast_miner.c (Native C Engine)</span>
+                </button>
                 <button
                   onClick={() => setSelectedScriptType('real')}
                   className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
@@ -332,7 +396,7 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                   }`}
                 >
                   <Coins className="w-3.5 h-3.5 text-amber-400" />
-                  <span>real_btc_miner.py (Stratum Pool)</span>
+                  <span>real_btc_miner.py (Single-Thread)</span>
                 </button>
                 <button
                   onClick={() => setSelectedScriptType('compressed')}
@@ -374,39 +438,111 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
         {/* TAB 3: Linux Deployment & Terminal Instructions */}
         {activeTab === 'linux-guide' && (
           <div className="space-y-4 text-xs">
-            {/* Primary: Zero Password / Instant Run (No GitHub Login Needed) */}
-            <div className="bg-gradient-to-r from-emerald-950/50 via-slate-950 to-slate-950 p-4 rounded-xl border-2 border-emerald-500/50 shadow-lg">
+            {/* Algorithmic Reality & Technical Upgrade Notice */}
+            <div className="bg-slate-950 p-4 rounded-xl border border-cyan-500/30 shadow-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="p-1 rounded bg-cyan-500/20 text-cyan-400">
+                  <Cpu className="w-4 h-4" />
+                </div>
+                <h4 className="text-sm font-bold text-white">Algorithmic Reality & Optimized Logic</h4>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">Upgraded Engine</span>
+              </div>
+              <p className="text-slate-300 leading-relaxed text-[11px] mb-3">
+                Bitcoin proof-of-work consensus and Stratum pools require the <strong>raw, uncompressed 256-bit double-SHA256</strong> hash to meet the network target. Bitwise XOR "folding" creates a compact 32-char hex string, but cryptographic collision resistance prevents skipping mathematical work. To maximize actual mining performance, the new engine incorporates 3 consensus-valid optimizations:
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                  <div className="font-semibold text-cyan-300 mb-1 flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-amber-400" />
+                    <span>1. Midstate Caching</span>
+                  </div>
+                  <p className="text-slate-400 text-[10px]">
+                    The first 64 bytes of the 80-byte block header are constant for all nonces. We hash it once and cache state <code className="text-slate-300">A-H</code>, eliminating 50% of SHA-256 cycles.
+                  </p>
+                </div>
+                <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                  <div className="font-semibold text-cyan-300 mb-1 flex items-center gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>2. Early MSB Filtering</span>
+                  </div>
+                  <p className="text-slate-400 text-[10px]">
+                    99.999% of nonces fail in the highest-order 32-bit word (<code className="text-slate-300">H &gt; target_h</code>). We reject them in 1 CPU cycle before string formatting or second round finalize.
+                  </p>
+                </div>
+                <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                  <div className="font-semibold text-cyan-300 mb-1 flex items-center gap-1.5">
+                    <Cpu className="w-3.5 h-3.5 text-purple-400" />
+                    <span>3. Multi-Core Concurrency</span>
+                  </div>
+                  <p className="text-slate-400 text-[10px]">
+                    Bypasses Python's GIL by distributing jobs across isolated multiprocessing workers (or POSIX C threads), scaling hashrate linearly with 100% of CPU cores.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Primary: Fast Multi-Core 1-Command Start (Zero Passwords, No GitHub Login) */}
+            <div className="bg-gradient-to-r from-cyan-950/40 via-slate-950 to-slate-950 p-4 rounded-xl border-2 border-cyan-500/50 shadow-lg">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                  <div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400">
                     <Play className="w-4 h-4" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-bold text-white">1-Command Start (Zero Passwords, No GitHub Login)</h4>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">No Login Needed</span>
+                      <h4 className="text-sm font-bold text-white">Recommended: Fast Multi-Core 1-Command Start</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">Multi-Core GIL-Bypass</span>
                     </div>
-                    <p className="text-[11px] text-slate-400">Paste directly into your Linux terminal. Creates and starts mining immediately with NO username or password prompts:</p>
+                    <p className="text-[11px] text-slate-400">Runs all CPU cores in parallel on live Stratum pools. Zero passwords, zero prompts:</p>
                   </div>
                 </div>
                 <button
-                  onClick={() => handleCopyCommand(DIRECT_NO_PASSWORD_CMD)}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow cursor-pointer"
+                  onClick={() => handleCopyCommand(FAST_MULTICORE_CMD)}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow cursor-pointer"
                 >
                   {copiedCmd ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copiedCmd ? 'Copied!' : 'Copy 1-Start Command'}
+                  {copiedCmd ? 'Copied!' : 'Copy Multi-Core Command'}
                 </button>
               </div>
 
-              <div className="bg-slate-900/90 p-3 rounded-lg border border-emerald-500/30 font-mono text-emerald-300 text-xs overflow-x-auto max-h-28 select-all">
-                <pre className="whitespace-pre">{DIRECT_NO_PASSWORD_CMD}</pre>
+              <div className="bg-slate-900/90 p-3 rounded-lg border border-cyan-500/30 font-mono text-cyan-300 text-xs overflow-x-auto max-h-28 select-all">
+                <pre className="whitespace-pre">{FAST_MULTICORE_CMD}</pre>
               </div>
               <p className="text-[10px] text-slate-400 mt-2">
-                Runs completely locally on your machine. Immediately connects to <code className="text-cyan-300">solo.ckpool.org:3333</code> and starts real Bitcoin block hashing.
+                Automatically detects total CPU core count, connects to <code className="text-cyan-300">solo.ckpool.org:3333</code>, streams live block jobs, and verifies valid shares against pool target.
               </p>
             </div>
 
-            {/* Option 2: 1-Start Real Bitcoin Stratum Pool Mining via Git */}
+            {/* Option 2: Native C Engine for Maximum Speed */}
+            <div className="bg-gradient-to-r from-purple-950/30 via-slate-950 to-slate-950 p-4 rounded-xl border border-purple-500/30 shadow">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400">
+                    <Zap className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white">Ultra-Fast Native C Miner (POSIX Threads & -O3)</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">C Engine</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">If you have GCC or Clang installed, compile native C for maximum hash throughput:</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCopyCommand(GCC_C_MINER_CMD)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center gap-1.5 transition shadow cursor-pointer border border-slate-700"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy GCC Command</span>
+                </button>
+              </div>
+
+              <div className="bg-slate-900/90 p-3 rounded-lg border border-purple-500/20 font-mono text-purple-300 text-xs flex items-center justify-between overflow-x-auto select-all">
+                <code>{GCC_C_MINER_CMD}</code>
+              </div>
+            </div>
+
+            {/* Option 3: Git Clone 1-Start Command */}
             <div className="bg-gradient-to-r from-amber-950/30 via-slate-950 to-slate-950 p-4 rounded-xl border border-amber-500/30 shadow">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
@@ -415,10 +551,10 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-bold text-white">Git Clone 1-Start Command (Requires Public GitHub Repo)</h4>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">GitHub Repo</span>
+                      <h4 className="text-sm font-bold text-white">Git Clone 1-Start Command (Automated Script)</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">Auto-Detect</span>
                     </div>
-                    <p className="text-[11px] text-slate-400">If using GitHub, ensure your repo is set to <strong>Public</strong> so Git never asks for a username or password:</p>
+                    <p className="text-[11px] text-slate-400">Clones repo and runs <code className="text-amber-300">start.sh</code> which automatically selects C or Multi-Core Python:</p>
                   </div>
                 </div>
                 <button
@@ -434,7 +570,7 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                 <code>{GITHUB_ONE_START_CMD}</code>
               </div>
               <div className="mt-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between text-[11px] text-slate-400 gap-2">
-                <span>Already inside repo folder? Just run: <code className="text-amber-300 bg-slate-900 px-1.5 py-0.5 rounded font-mono select-all">{LOCAL_ONE_START_CMD}</code></span>
+                <span>Already inside repo folder? Run: <code className="text-amber-300 bg-slate-900 px-1.5 py-0.5 rounded font-mono select-all">{LOCAL_ONE_START_CMD}</code></span>
               </div>
             </div>
 
