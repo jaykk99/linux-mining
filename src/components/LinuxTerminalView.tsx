@@ -10,6 +10,64 @@ interface LinuxTerminalViewProps {
   onToggleMining: () => void;
 }
 
+const DIRECT_NO_PASSWORD_CMD = `mkdir -p ~/btc-miner && cd ~/btc-miner && cat << 'EOF' > miner.py
+import socket, json, hashlib, time, binascii, sys, struct, threading
+WALLET = sys.argv[1] if len(sys.argv) > 1 else "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+def dbl_sha256(b): return hashlib.sha256(hashlib.sha256(b).digest()).digest()
+def shrink(c8): return format(int(c8[:4], 16) ^ int(c8[4:], 16), '04x')
+def compress(h): return "".join(shrink(h[i:i+8]) for i in range(0, len(h), 8))
+def get_target(nb): n = int(nb, 16); return (n & 0xffffff) * (2 ** (8 * ((n >> 24) - 3)))
+print(f"[*] Connecting to Bitcoin Mining Pool (solo.ckpool.org:3333) for: {WALLET}")
+s = socket.socket(); s.connect(("solo.ckpool.org", 3333))
+s.sendall(b'{"id":1,"method":"mining.subscribe","params":["miner/1.0"]}\\n')
+sub = json.loads(s.recv(4096).decode().split("\\n")[0])["result"]
+e1, e2s = sub[1], int(sub[2])
+s.sendall(f'{{"id":2,"method":"mining.authorize","params":["{WALLET}.worker1","x"]}}\\n'.encode())
+print(f"[✓] Connected & Authorized! Mining live Bitcoin blocks...")
+job, pool_target = None, int(0x00000000ffff0000000000000000000000000000000000000000000000000000 / 1000)
+def miner_loop():
+    global job, pool_target
+    en2, hashes, t0 = 0, 0, time.time()
+    while True:
+        if not job: time.sleep(0.05); continue
+        cur = dict(job)
+        en2_hex = format(en2, f"0{e2s*2}x")
+        cb = binascii.unhexlify(cur["cb1"] + e1 + en2_hex + cur["cb2"])
+        mr = dbl_sha256(cb)
+        for b in cur["branches"]: mr = dbl_sha256(mr + binascii.unhexlify(b))
+        pfx = binascii.unhexlify(cur["v"])[::-1] + b"".join(binascii.unhexlify(cur["prev"])[i:i+4][::-1] for i in range(0, 32, 4)) + mr + binascii.unhexlify(cur["nt"])[::-1] + binascii.unhexlify(cur["nb"])[::-1]
+        for nonce in range(0, 0xffffffff):
+            if not job or job.get("id") != cur["id"]: break
+            h = dbl_sha256(pfx + struct.pack("<I", nonce))
+            h_int = int.from_bytes(h, "big")
+            h_hex = binascii.hexlify(h[::-1]).decode()
+            comp = compress(h_hex)
+            if h_int <= pool_target:
+                print(f"\\n[$$$] REAL BTC SHARE! Nonce: {hex(nonce)} | Hash: {h_hex}")
+                s.sendall(f'{{"id":3,"method":"mining.submit","params":["{WALLET}.worker1","{cur["id"]}","{en2_hex}","{cur["nt"]}","{format(nonce,"08x")}"]}}\\n'.encode())
+            if h_int <= cur["net_target"]:
+                print(f"\\n[🚨 JACKPOT! 🚨] SOLVED FULL BITCOIN BLOCK! Hash: {h_hex}")
+            hashes += 1
+            if hashes % 50000 == 0:
+                el = max(0.001, time.time() - t0)
+                sys.stdout.write(f"\\r[-] Mining: {hashes:,} nonces ({(hashes/el)/1000:.1f} kH/s) | Compressed: {comp[:8]}... ")
+                sys.stdout.flush()
+        en2 += 1
+threading.Thread(target=miner_loop, daemon=True).start()
+buf = ""
+while True:
+    buf += s.recv(4096).decode()
+    while "\\n" in buf:
+        line, buf = buf.split("\\n", 1)
+        if not line.strip(): continue
+        m = json.loads(line)
+        if m.get("method") == "mining.notify":
+            p = m["params"]
+            job = {"id": p[0], "prev": p[1], "cb1": p[2], "cb2": p[3], "branches": p[4], "v": p[5], "nb": p[6], "nt": p[7], "net_target": get_target(p[6])}
+            print(f"\\n[+] New live Bitcoin block template received! Job ID: {p[0]}")
+EOF
+python3 miner.py`;
+
 const GITHUB_ONE_START_CMD = `git clone https://github.com/jayomer1234/btc-miner.git && ./btc-miner/start.sh`;
 const LOCAL_ONE_START_CMD = `./start.sh`;
 const GITHUB_COMPRESSED_CMD = `git clone https://github.com/jayomer1234/btc-miner.git && cd btc-miner && ./install.sh && python3 compressed_miner.py`;
@@ -316,8 +374,40 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
         {/* TAB 3: Linux Deployment & Terminal Instructions */}
         {activeTab === 'linux-guide' && (
           <div className="space-y-4 text-xs">
-            {/* Option 1: 1-Start Real Bitcoin Stratum Pool Mining */}
-            <div className="bg-gradient-to-r from-amber-950/40 via-slate-950 to-slate-950 p-4 rounded-xl border-2 border-amber-500/40 shadow-lg">
+            {/* Primary: Zero Password / Instant Run (No GitHub Login Needed) */}
+            <div className="bg-gradient-to-r from-emerald-950/50 via-slate-950 to-slate-950 p-4 rounded-xl border-2 border-emerald-500/50 shadow-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                    <Play className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white">1-Command Start (Zero Passwords, No GitHub Login)</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">No Login Needed</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">Paste directly into your Linux terminal. Creates and starts mining immediately with NO username or password prompts:</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCopyCommand(DIRECT_NO_PASSWORD_CMD)}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow cursor-pointer"
+                >
+                  {copiedCmd ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedCmd ? 'Copied!' : 'Copy 1-Start Command'}
+                </button>
+              </div>
+
+              <div className="bg-slate-900/90 p-3 rounded-lg border border-emerald-500/30 font-mono text-emerald-300 text-xs overflow-x-auto max-h-28 select-all">
+                <pre className="whitespace-pre">{DIRECT_NO_PASSWORD_CMD}</pre>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-2">
+                Runs completely locally on your machine. Immediately connects to <code className="text-cyan-300">solo.ckpool.org:3333</code> and starts real Bitcoin block hashing.
+              </p>
+            </div>
+
+            {/* Option 2: 1-Start Real Bitcoin Stratum Pool Mining via Git */}
+            <div className="bg-gradient-to-r from-amber-950/30 via-slate-950 to-slate-950 p-4 rounded-xl border border-amber-500/30 shadow">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">
@@ -325,27 +415,26 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-bold text-white">1-Start Command: Real Bitcoin Pool Miner</h4>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">1-Command Start</span>
+                      <h4 className="text-sm font-bold text-white">Git Clone 1-Start Command (Requires Public GitHub Repo)</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">GitHub Repo</span>
                     </div>
-                    <p className="text-[11px] text-slate-400">Single copy & paste command to clone, set up, and start live Stratum Bitcoin pool mining:</p>
+                    <p className="text-[11px] text-slate-400">If using GitHub, ensure your repo is set to <strong>Public</strong> so Git never asks for a username or password:</p>
                   </div>
                 </div>
                 <button
                   onClick={() => handleCopyCommand(GITHUB_ONE_START_CMD)}
-                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs flex items-center gap-1.5 transition shadow cursor-pointer"
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center gap-1.5 transition shadow cursor-pointer border border-slate-700"
                 >
-                  {copiedCmd ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copiedCmd ? 'Copied!' : 'Copy 1-Start Command'}
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Git Command</span>
                 </button>
               </div>
 
-              <div className="bg-slate-900/90 p-3 rounded-lg border border-amber-500/30 font-mono text-amber-300 text-xs flex items-center justify-between overflow-x-auto select-all">
+              <div className="bg-slate-900/90 p-3 rounded-lg border border-amber-500/20 font-mono text-amber-300 text-xs flex items-center justify-between overflow-x-auto select-all">
                 <code>{GITHUB_ONE_START_CMD}</code>
               </div>
               <div className="mt-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between text-[11px] text-slate-400 gap-2">
-                <span>Already cloned or in repo folder? Just run: <code className="text-amber-300 bg-slate-900 px-1.5 py-0.5 rounded font-mono select-all">{LOCAL_ONE_START_CMD}</code></span>
-                <span className="text-amber-400/90 font-medium">Auto-connects to live solo pool & starts hashing</span>
+                <span>Already inside repo folder? Just run: <code className="text-amber-300 bg-slate-900 px-1.5 py-0.5 rounded font-mono select-all">{LOCAL_ONE_START_CMD}</code></span>
               </div>
             </div>
 
