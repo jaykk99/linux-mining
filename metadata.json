@@ -1,0 +1,6 @@
+{
+  "name": "Linux BTC 8-to-4 Compressed Miner",
+  "description": "Bitcoin miner and folding analyzer implementing 8-to-4 character lossy compression for rapid pattern discovery on Linux.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
