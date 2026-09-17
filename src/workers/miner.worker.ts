@@ -95,31 +95,36 @@ function sha256Bytes(data: Uint8Array): Uint8Array {
   return result;
 }
 
-function doubleSha256(input: string): string {
-  const bytes = textEncoder.encode(input);
-  const first = sha256Bytes(bytes);
-  const second = sha256Bytes(first);
-  
+function doubleSha256Raw(inputBytes: Uint8Array): Uint8Array {
+  const first = sha256Bytes(inputBytes);
+  return sha256Bytes(first);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
   let hex = '';
-  for (let i = 0; i < second.length; i++) {
-    hex += second[i].toString(16).padStart(2, '0');
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, '0');
   }
   return hex;
 }
 
-function shrinkChunk8to4(chunk8: string): string {
-  const p1 = parseInt(chunk8.slice(0, 4), 16) || 0;
-  const p2 = parseInt(chunk8.slice(4, 8), 16) || 0;
-  const folded = (p1 ^ p2) & 0xffff;
-  return folded.toString(16).padStart(4, '0');
+// Fast word-level 8-to-4 XOR folding directly on 32-byte binary output (bypasses string slicing & parsing)
+function fold32BytesTo16Words(bytes: Uint8Array): Uint16Array {
+  const folded = new Uint16Array(8);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < 8; i++) {
+    const word32 = view.getUint32(i * 4, false);
+    folded[i] = ((word32 >>> 16) ^ (word32 & 0xffff)) & 0xffff;
+  }
+  return folded;
 }
 
-function compressFullHash(fullHash: string): string {
-  let compressed = '';
-  for (let i = 0; i < fullHash.length; i += 8) {
-    compressed += shrinkChunk8to4(fullHash.slice(i, i + 8));
+function foldedWordsToHex(folded: Uint16Array): string {
+  let hex = '';
+  for (let i = 0; i < 8; i++) {
+    hex += folded[i].toString(16).padStart(4, '0');
   }
-  return compressed;
+  return hex;
 }
 
 let isMining = false;
@@ -131,18 +136,71 @@ let lastReportTime = 0;
 let lastReportNonce = 0;
 let pauseOnMatch = false;
 
+// Pre-compiled prefix byte buffer
+let pfxBytes: Uint8Array = textEncoder.encode(`${headerTemplate}:`);
+// Pre-allocated work buffer for blockData
+const workBuf = new Uint8Array(256);
+
+function updatePrefixBuffer() {
+  const pfx = textEncoder.encode(`${headerTemplate}:`);
+  pfxBytes = pfx;
+  workBuf.set(pfxBytes, 0);
+}
+
 function mineLoop() {
   if (!isMining) return;
 
-  const batchSize = 1000;
+  const batchSize = 2500;
   const now = performance.now();
+  const pfxLen = pfxBytes.length;
+  const targetLen = targetPattern.length;
 
   for (let i = 0; i < batchSize; i++) {
-    const blockData = `${headerTemplate}:${currentNonce}`;
-    const fullHash = doubleSha256(blockData);
-    const compressedHash = compressFullHash(fullHash);
+    // Write nonce as ASCII numbers directly into work buffer without string concatenation
+    let n = currentNonce;
+    let digitCount = 0;
+    let temp = n;
+    if (temp === 0) digitCount = 1;
+    else {
+      while (temp > 0) {
+        digitCount++;
+        temp = (temp / 10) | 0;
+      }
+    }
 
-    if (compressedHash.startsWith(targetPattern.toLowerCase())) {
+    let pos = pfxLen + digitCount - 1;
+    temp = n;
+    if (temp === 0) {
+      workBuf[pfxLen] = 48; // '0'
+    } else {
+      while (temp > 0) {
+        workBuf[pos--] = 48 + (temp % 10);
+        temp = (temp / 10) | 0;
+      }
+    }
+    const totalInputLen = pfxLen + digitCount;
+    const inputSlice = workBuf.subarray(0, totalInputLen);
+
+    const hashBytes = doubleSha256Raw(inputSlice);
+    const folded = fold32BytesTo16Words(hashBytes);
+
+    // Fast check first 16 bits / 4 hex chars in 1 CPU operation
+    // targetPattern: "1122" -> int: 0x1122
+    let matched = false;
+    if (targetLen <= 4) {
+      const targetInt = parseInt(targetPattern.padEnd(4, '0'), 16);
+      const mask = 0xffff >>> ((4 - targetLen) * 4);
+      const shift = (4 - targetLen) * 4;
+      matched = ((folded[0] >>> shift) === (targetInt >>> shift));
+    } else {
+      const compHex = foldedWordsToHex(folded);
+      matched = compHex.startsWith(targetPattern.toLowerCase());
+    }
+
+    if (matched) {
+      const compHex = foldedWordsToHex(folded);
+      const fullHex = bytesToHex(hashBytes);
+      const blockData = `${headerTemplate}:${currentNonce}`;
       const elapsedTotal = (performance.now() - startTime) / 1000;
       const khs = elapsedTotal > 0 ? (currentNonce / elapsedTotal) / 1000 : 0;
 
@@ -150,8 +208,8 @@ function mineLoop() {
         type: 'MATCH_FOUND',
         payload: {
           nonce: currentNonce,
-          fullHash,
-          compressedHash,
+          fullHash: fullHex,
+          compressedHash: compHex,
           targetMatched: targetPattern,
           elapsedSec: elapsedTotal,
           avgHashRateKHS: khs,
@@ -170,8 +228,8 @@ function mineLoop() {
     currentNonce++;
   }
 
-  // Periodic throttle report (~ every 100ms)
-  if (now - lastReportTime >= 100) {
+  // Periodic throttle report (~ every 120ms)
+  if (now - lastReportTime >= 120) {
     const timeDeltaSec = (now - lastReportTime) / 1000;
     const nonceDelta = currentNonce - lastReportNonce;
     const currentHashRate = timeDeltaSec > 0 ? nonceDelta / timeDeltaSec : 0;
@@ -179,8 +237,11 @@ function mineLoop() {
 
     // Grab a sample candidate for UI visualization
     const sampleData = `${headerTemplate}:${currentNonce}`;
-    const sampleFull = doubleSha256(sampleData);
-    const sampleComp = compressFullHash(sampleFull);
+    const sampleBytes = textEncoder.encode(sampleData);
+    const sampleHash = doubleSha256Raw(sampleBytes);
+    const sampleFolded = fold32BytesTo16Words(sampleHash);
+    const sampleFull = bytesToHex(sampleHash);
+    const sampleComp = foldedWordsToHex(sampleFolded);
 
     self.postMessage({
       type: 'PROGRESS',
@@ -198,7 +259,6 @@ function mineLoop() {
   }
 
   if (isMining) {
-    // Schedule next batch without blocking event loop
     setTimeout(mineLoop, 0);
   }
 }
@@ -214,6 +274,7 @@ self.onmessage = (event) => {
         if (typeof payload.nonce === 'number') currentNonce = payload.nonce;
         if (typeof payload.pauseOnMatch === 'boolean') pauseOnMatch = payload.pauseOnMatch;
       }
+      updatePrefixBuffer();
       isMining = true;
       startTime = performance.now();
       lastReportTime = startTime;
@@ -248,6 +309,7 @@ self.onmessage = (event) => {
       if (payload.headerTemplate) headerTemplate = payload.headerTemplate;
       if (payload.targetPattern) targetPattern = payload.targetPattern;
       if (typeof payload.pauseOnMatch === 'boolean') pauseOnMatch = payload.pauseOnMatch;
+      updatePrefixBuffer();
       break;
 
     default:

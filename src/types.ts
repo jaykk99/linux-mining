@@ -51,3 +51,17 @@ export interface TerminalLine {
   type: 'info' | 'success' | 'warn' | 'dim' | 'prompt';
   timestamp: string;
 }
+
+export type PoolEmissionPhaseType = 'genesis' | 'expansion' | 'the_cap' | 'controller';
+
+export interface PoolLifecycleState {
+  currentMined: number;
+  totalSupply: number; // 1,000,000
+  phase: PoolEmissionPhaseType;
+  currentBlockReward: number;
+  difficultyMultiplier: number;
+  inflationRatePct: number;
+  blocksMinedCount: number;
+  controllerFeeCaptureSats: number;
+  secondaryTxProcessed: number;
+}

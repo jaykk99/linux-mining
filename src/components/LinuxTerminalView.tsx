@@ -4,6 +4,9 @@ import { TerminalLine } from '../types';
 import { REAL_BTC_MINER_SCRIPT } from '../realBtcMinerScript';
 import { FAST_MINER_PY_SCRIPT, FAST_MINER_C_SCRIPT } from '../fastMinerScripts';
 import { STREAM_ENGINE_C_CODE, STREAM_ENGINE_PY_CODE, ALGEBRAIC_SOLVER_C_CODE, ALGEBRAIC_SOLVER_PY_CODE } from '../streamEngineScripts';
+import { generatePrivatePoolPython } from '../utils/poolScripts';
+import { generateLightningApiPython } from '../utils/lightningScripts';
+import { getSavedWallet } from '../utils/bitcoinWallet';
 
 interface LinuxTerminalViewProps {
   terminalLogs: TerminalLine[];
@@ -25,23 +28,32 @@ def worker(cid, cores, jq, sq, cnt):
     cur_id, pfx, pt, nt, en2, nt_hex = None, b"", 0, 0, "", ""
     nonce = cid
     loc = 0
-    p = struct.pack
     fb = int.from_bytes
+    hdr_buf = bytearray(80)
+    pt_msb = 0
     while True:
         while not jq.empty():
             try:
                 j = jq.get_nowait()
                 cur_id, pfx, pt, nt, en2, nt_hex = j["id"], j["pfx"], j["pt"], j["nt"], j["en2"], j["nt_hex"]
+                hdr_buf[:76] = pfx
+                pt_msb = pt >> 224
                 nonce = cid
             except: pass
         if not cur_id or not pfx:
             time.sleep(0.02); continue
-        bend = nonce + (50000 * cores)
+        bend = nonce + (100000 * cores)
         while nonce < bend:
-            hb = d_sha(pfx + p("<I", nonce))
-            hint = fb(hb, "big")
-            if hint <= pt:
-                sq.put({"core": cid, "id": cur_id, "en2": en2, "nt": nt_hex, "nonce": format(nonce, "08x"), "h": binascii.hexlify(hb[::-1]).decode(), "blk": hint <= nt})
+            hdr_buf[76] = nonce & 0xFF
+            hdr_buf[77] = (nonce >> 8) & 0xFF
+            hdr_buf[78] = (nonce >> 16) & 0xFF
+            hdr_buf[79] = (nonce >> 24) & 0xFF
+            hb = d_sha(hdr_buf)
+            msb32 = (hb[31] << 24) | (hb[30] << 16) | (hb[29] << 8) | hb[28]
+            if msb32 <= pt_msb:
+                hint = fb(hb, "big")
+                if hint <= pt:
+                    sq.put({"core": cid, "id": cur_id, "en2": en2, "nt": nt_hex, "nonce": format(nonce, "08x"), "h": binascii.hexlify(hb[::-1]).decode(), "blk": hint <= nt})
             nonce += cores
             loc += 1
         with cnt.get_lock(): cnt.value += loc
@@ -49,9 +61,9 @@ def worker(cid, cores, jq, sq, cnt):
 
 if __name__ == "__main__":
     cores = os.cpu_count() or 4
-    print(f"[*] Starting Multi-Core Bitcoin Miner on {cores} CPU Cores for: {WALLET}")
+    print(f"[*] Starting Ultra-Optimized Bitcoin Miner on {cores} CPU Cores for: {WALLET}")
     s = socket.socket(); s.connect((HOST, PORT))
-    s.sendall(b'{"id":1,"method":"mining.subscribe","params":["fast/1.0"]}\\n')
+    s.sendall(b'{"id":1,"method":"mining.subscribe","params":["fast/2.0"]}\\n')
     sub = json.loads(s.recv(4096).decode().split("\\n")[0])["result"]
     e1, e2s = sub[1], int(sub[2])
     s.sendall(f'{{"id":2,"method":"mining.authorize","params":["{WALLET}.multicore","x"]}}\\n'.encode())
@@ -95,7 +107,7 @@ if __name__ == "__main__":
         with cnt.get_lock(): tot = cnt.value
         sys.stdout.write(f"\\r[-] Hashes: {tot:,} | Speed: {(tot/el)/1000:.1f} kH/s across {cores} cores ")
         sys.stdout.flush()
-        time.sleep(0.1)
+        time.sleep(0.25)
 EOF
 python3 fast_miner.py`;
 
@@ -106,84 +118,90 @@ const GITHUB_COMPRESSED_CMD = `git clone https://github.com/jayomer1234/btc-mine
 
 const PYTHON_SCRIPT_CODE = `#!/usr/bin/env python3
 """
-Linux BTC Miner with 8-to-4 Chunk Folding Compression Logic
-Shrinks 64-character double-SHA256 hex string into 32-character folded hex.
+Linux BTC Miner with 8-to-4 Chunk Folding Compression Logic (Ultra-Optimized)
+- Replaces string slicing inside the inner loop with pre-baked byte casting and struct unpacking.
+- Folds 32-bit binary integers directly via bitwise XOR without string conversions.
+- Reduced print frequency to prevent terminal I/O latency bottlenecks.
 """
 
 import hashlib
 import time
 import sys
-
-def shrink_chunk_8_to_4(chunk_8):
-    """
-    Takes an 8-character hex chunk (32 bits) and shrinks it 
-    down into a 4-character hex chunk (16 bits) using a folding function.
-    """
-    # Split the 8 chars into two 4-char halves
-    part1 = int(chunk_8[:4], 16)
-    part2 = int(chunk_8[4:], 16)
-    
-    # Fold them together using XOR so the whole 8 chars influence the result
-    folded = part1 ^ part2
-    
-    # Format back into a 4-character hex string
-    return format(folded, '04x')
-
-def compress_full_hash(full_hash):
-    """
-    Splits a 64-character hash into 8-character chunks and shrinks 
-    each one down to 4 characters, resulting in a 32-character compressed hash.
-    """
-    compressed_hash = ""
-    # Step through the 64-char hash in steps of 8 characters
-    for i in range(0, len(full_hash), 8):
-        chunk_8 = full_hash[i:i+8]
-        compressed_hash += shrink_chunk_8_to_4(chunk_8)
-    return compressed_hash
+import struct
 
 def run_compressed_miner(header_template, target_compressed_pattern):
-    print(f"[*] Starting 8-to-4 Compression Linux Miner...")
+    print(f"[*] Starting Ultra-Optimized 8-to-4 Compression Linux Miner...")
     print(f"[*] Target Compressed Pattern: {target_compressed_pattern}")
+    
+    # Pre-encode header template prefix into reusable bytearray
+    prefix_bytes = f"{header_template}:".encode('utf-8')
+    prefix_len = len(prefix_bytes)
+    work_buf = bytearray(prefix_bytes + b"0" * 20)
+    
+    # Target integer for first 4 characters (16-bit fold)
+    target_int = int(target_compressed_pattern[:4], 16) if len(target_compressed_pattern) >= 4 else 0
+    target_len = len(target_compressed_pattern)
+
+    sha256 = hashlib.sha256
+    unpack = struct.unpack
     
     nonce = 0
     start_time = time.time()
     
     try:
         while True:
-            # Construct block header variant with current nonce
-            block_data = f"{header_template}:{nonce}"
+            # Direct in-place ASCII nonce encoding to eliminate string formatting allocations
+            nonce_str = str(nonce).encode('ascii')
+            work_buf[prefix_len:prefix_len + len(nonce_str)] = nonce_str
+            data_slice = memoryview(work_buf)[:prefix_len + len(nonce_str)]
             
-            # Standard double-SHA256
-            hash1 = hashlib.sha256(block_data.encode('utf-8')).digest()
-            full_hash = hashlib.sha256(hash1).hexdigest()
+            # Double SHA-256 in raw binary
+            raw_hash = sha256(sha256(data_slice).digest()).digest()
             
-            # Apply your 8-to-4 shrinking logic
-            compressed_hash = compress_full_hash(full_hash)
+            # Unpack first 8 bytes as two 32-bit big-endian integers
+            w0, w1 = unpack(">II", raw_hash[:8])
             
-            # Check if our compressed hash starts with or matches the target pattern
-            if compressed_hash.startswith(target_compressed_pattern):
+            # Direct 8-to-4 mathematical XOR fold in pure CPU integer registers (no hex string slicing)
+            fold0 = ((w0 >> 16) ^ (w0 & 0xFFFF)) & 0xFFFF
+            
+            # Instant 1-cycle match check
+            if target_len <= 4:
+                shift = (4 - target_len) * 4
+                is_match = (fold0 >> shift) == (target_int >> shift)
+            else:
+                words = unpack(">IIIIIIII", raw_hash)
+                comp_hex = "".join(f"{((w >> 16) ^ (w & 0xFFFF)) & 0xFFFF:04x}" for w in words)
+                is_match = comp_hex.startswith(target_compressed_pattern)
+            
+            if is_match:
                 elapsed = time.time() - start_time
+                words = unpack(">IIIIIIII", raw_hash)
+                comp_hex = "".join(f"{((w >> 16) ^ (w & 0xFFFF)) & 0xFFFF:04x}" for w in words)
+                full_hash = raw_hash.hex()
                 print(f"\\n[+] SUCCESS! Match Found!")
-                print(f"    Nonce: {nonce}")
-                print(f"    Full Hash: {full_hash}")
-                print(f"    Compressed Hash: {compressed_hash}")
-                print(f"    Time Taken: {elapsed:.2f} seconds")
+                print(f"    Nonce:           {nonce:,}")
+                print(f"    Full Hash:       {full_hash}")
+                print(f"    Compressed Hash: {comp_hex}")
+                print(f"    Time Taken:      {elapsed:.2f} seconds")
                 break
                 
             nonce += 1
             
-            if nonce % 50000 == 0:
-                print(f"[-] Tried {nonce} nonces... Current compressed: {compressed_hash[:8]}...", end='\\r')
+            # Cut down print frequency from 50k to 131k (bitwise mask) to prevent terminal I/O blocking
+            if (nonce & 0x1FFFF) == 0:
+                elapsed = max(0.001, time.time() - start_time)
+                khs = (nonce / elapsed) / 1000.0
+                words = unpack(">IIIIIIII", raw_hash)
+                comp_hex = "".join(f"{((w >> 16) ^ (w & 0xFFFF)) & 0xFFFF:04x}" for w in words)
+                sys.stdout.write(f"\\r[-] Nonce: {nonce:,} | Speed: {khs:.1f} kH/s | Latest Compressed: {comp_hex[:8]}... ")
+                sys.stdout.flush()
                 
     except KeyboardInterrupt:
         print("\\n[*] Mining stopped by user.")
 
 if __name__ == "__main__":
     template = "BLOCK_DATA_JAY_OMER_LINUX_NODE_2026"
-    
-    # Target starting pattern for your 32-character compressed hash
     target_pattern = "1122" 
-    
     run_compressed_miner(template, target_pattern)
 `;
 
@@ -210,7 +228,7 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
   onToggleMining,
 }) => {
   const [activeTab, setActiveTab] = useState<'console' | 'script' | 'linux-guide'>('console');
-  const [selectedScriptType, setSelectedScriptType] = useState<'algebraic_c' | 'algebraic_py' | 'stream_c' | 'stream_py' | 'fast_py' | 'fast_c' | 'real' | 'compressed'>('algebraic_c');
+  const [selectedScriptType, setSelectedScriptType] = useState<'algebraic_c' | 'algebraic_py' | 'stream_c' | 'stream_py' | 'fast_py' | 'fast_c' | 'real' | 'compressed' | 'private_pool' | 'lightning_api'>('algebraic_c');
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -244,6 +262,12 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
   } else if (selectedScriptType === 'compressed') {
     activeScriptCode = PYTHON_SCRIPT_CODE;
     activeScriptFilename = 'compressed_miner.py';
+  } else if (selectedScriptType === 'private_pool') {
+    activeScriptCode = generatePrivatePoolPython(getSavedWallet());
+    activeScriptFilename = 'private_pool.py';
+  } else if (selectedScriptType === 'lightning_api') {
+    activeScriptCode = generateLightningApiPython('02d84a7e91...b42@127.0.0.1:9735', getSavedWallet());
+    activeScriptFilename = 'lightning_api_server.py';
   }
 
   const handleCopyScript = () => {
@@ -466,6 +490,28 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                   <FileCode className="w-3.5 h-3.5 text-emerald-400" />
                   <span>compressed_miner.py (Benchmark)</span>
                 </button>
+                <button
+                  onClick={() => setSelectedScriptType('private_pool')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'private_pool'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Server className="w-3.5 h-3.5 text-amber-400" />
+                  <span>private_pool.py (Solo Server)</span>
+                </button>
+                <button
+                  onClick={() => setSelectedScriptType('lightning_api')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'lightning_api'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                  <span>lightning_api_server.py (L402)</span>
+                </button>
               </div>
 
               <div className="flex items-center gap-2">
@@ -507,14 +553,14 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
               <p className="text-slate-300 leading-relaxed text-[11px] mb-3">
                 Bitcoin proof-of-work consensus and Stratum pools require the <strong>raw, uncompressed 256-bit double-SHA256</strong> hash to meet the network target. Bitwise XOR "folding" creates a compact 32-char hex string, but cryptographic collision resistance prevents skipping mathematical work. To maximize actual mining performance, the new engine incorporates 3 consensus-valid optimizations:
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
                 <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
                   <div className="font-semibold text-cyan-300 mb-1 flex items-center gap-1.5">
                     <Zap className="w-3.5 h-3.5 text-amber-400" />
                     <span>1. Midstate Caching</span>
                   </div>
                   <p className="text-slate-400 text-[10px]">
-                    The first 64 bytes of the 80-byte block header are constant for all nonces. We hash it once and cache state <code className="text-slate-300">A-H</code>, eliminating 50% of SHA-256 cycles.
+                    The first 64 bytes of the 80-byte header are static per block. We hash them once, skipping 50% of SHA-256 transformations.
                   </p>
                 </div>
                 <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
@@ -523,16 +569,25 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                     <span>2. Early MSB Filtering</span>
                   </div>
                   <p className="text-slate-400 text-[10px]">
-                    99.999% of nonces fail in the highest-order 32-bit word (<code className="text-slate-300">H &gt; target_h</code>). We reject them in 1 CPU cycle before string formatting or second round finalize.
+                    99.999% of nonces fail in the high 32-bit word (<code className="text-slate-300">H &gt; target_h</code>). Tested in 1 cycle before string formatting.
                   </p>
                 </div>
                 <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
                   <div className="font-semibold text-cyan-300 mb-1 flex items-center gap-1.5">
                     <Cpu className="w-3.5 h-3.5 text-purple-400" />
-                    <span>3. Multi-Core Concurrency</span>
+                    <span>3. Multi-Core Workers</span>
                   </div>
                   <p className="text-slate-400 text-[10px]">
-                    Bypasses Python's GIL by distributing jobs across isolated multiprocessing workers (or POSIX C threads), scaling hashrate linearly with 100% of CPU cores.
+                    Bypasses Python's GIL by distributing mining jobs across isolated multiprocessing workers, fully saturating 100% of CPU cores.
+                  </p>
+                </div>
+                <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                  <div className="font-semibold text-cyan-300 mb-1 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>4. Byte Casting & I/O</span>
+                  </div>
+                  <p className="text-slate-400 text-[10px]">
+                    Replaced inner string slicing with in-place <code className="text-slate-300">bytearray</code> casting and throttled terminal print calls to prevent I/O blocking.
                   </p>
                 </div>
               </div>

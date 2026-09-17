@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { STREAM_ENGINE_C_CODE, STREAM_ENGINE_PY_CODE } from '../streamEngineScripts';
 import { AlgebraicStreamSolver } from './AlgebraicStreamSolver';
+import { CryptanalyticSolverView } from './CryptanalyticSolverView';
 
 interface StreamMatch {
   id: string;
@@ -40,7 +41,7 @@ export const StreamEngineView: React.FC = () => {
   const [isRunning, setIsRunning] = useState<boolean>(true);
   const [targetPattern, setTargetPattern] = useState<string>('1122');
   const [streamSpeed, setStreamSpeed] = useState<number>(50); // burst scale
-  const [activeTab, setActiveTab] = useState<'simulator' | 'algebraic' | 'commands' | 'code-c' | 'code-py' | 'blueprint'>('algebraic');
+  const [activeTab, setActiveTab] = useState<'cryptanalytic' | 'algebraic' | 'simulator' | 'commands' | 'code-c' | 'code-py' | 'blueprint'>('cryptanalytic');
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
 
   // Streaming metrics
@@ -282,6 +283,18 @@ python3 stream_engine.py ${targetPattern || '1122'}`;
       {/* Navigation Sub-Tabs */}
       <div className="flex flex-wrap items-center gap-2 bg-slate-900/90 p-1.5 rounded-xl border border-slate-800 text-xs">
         <button
+          onClick={() => setActiveTab('cryptanalytic')}
+          className={`px-3.5 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'cryptanalytic'
+              ? 'bg-amber-600/30 text-amber-300 shadow border border-amber-500/40 font-bold'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5 text-amber-400" />
+          <span>Midstate, Swarms & SAT Solver</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('algebraic')}
           className={`px-3.5 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
             activeTab === 'algebraic'
@@ -353,6 +366,11 @@ python3 stream_engine.py ${targetPattern || '1122'}`;
           <span>Architecture Deep Dive</span>
         </button>
       </div>
+
+      {/* VIEW -1: CRYPTANALYTIC, MIDSTATE & SAT SOLVER */}
+      {activeTab === 'cryptanalytic' && (
+        <CryptanalyticSolverView />
+      )}
 
       {/* VIEW 0: ALGEBRAIC INVARIANCE & FRACTAL SOLVER */}
       {activeTab === 'algebraic' && (

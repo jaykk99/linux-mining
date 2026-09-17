@@ -9,7 +9,10 @@ import {
   VolumeX, 
   Activity, 
   ShieldCheck,
-  Code
+  Code,
+  Server,
+  Zap,
+  Database
 } from 'lucide-react';
 import { MiningStats, MinerConfig, MinedBlock, TerminalLine } from './types';
 import { MiningDashboard } from './components/MiningDashboard';
@@ -18,9 +21,12 @@ import { LinuxTerminalView } from './components/LinuxTerminalView';
 import { MinedBlocksList } from './components/MinedBlocksList';
 import { CustomHashInspector } from './components/CustomHashInspector';
 import { StreamEngineView } from './components/StreamEngineView';
+import { PrivateSoloPoolView } from './components/PrivateSoloPoolView';
+import { LightningMonetizedApiView } from './components/LightningMonetizedApiView';
+import { LedgerSimulationView } from './components/LedgerSimulationView';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'miner' | 'terminal' | 'stream' | 'blocks' | 'math'>('stream');
+  const [activeView, setActiveView] = useState<'lightning' | 'pool' | 'stream' | 'miner' | 'terminal' | 'blocks' | 'math' | 'ledger'>('ledger');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [pauseOnMatch, setPauseOnMatch] = useState(false);
 
@@ -256,6 +262,48 @@ export default function App() {
           {/* Navigation Tabs */}
           <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs w-full sm:w-auto overflow-x-auto">
             <button
+              onClick={() => setActiveView('ledger')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeView === 'ledger'
+                  ? 'bg-slate-800 text-purple-300 shadow-sm border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Database className="w-3.5 h-3.5 text-purple-400" />
+              <span>Ledger Sweep</span>
+            </button>
+
+            <button
+              onClick={() => setActiveView('lightning')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeView === 'lightning'
+                  ? 'bg-slate-800 text-amber-300 shadow-sm border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+              <span>Lightning APIs</span>
+              <span className="bg-amber-500/20 text-amber-300 text-[9px] font-mono px-1 rounded border border-amber-500/30">
+                L402
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveView('pool')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeView === 'pool'
+                  ? 'bg-slate-800 text-amber-300 shadow-sm border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Server className="w-3.5 h-3.5 text-amber-400" />
+              <span>Private Solo Pool</span>
+              <span className="bg-amber-500/20 text-amber-300 text-[9px] font-mono px-1 rounded border border-amber-500/30">
+                Port 3333
+              </span>
+            </button>
+
+            <button
               onClick={() => setActiveView('stream')}
               className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeView === 'stream'
@@ -337,6 +385,21 @@ export default function App() {
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* VIEW: Custom Ledger Emission Simulation */}
+        {activeView === 'ledger' && (
+          <LedgerSimulationView />
+        )}
+
+        {/* VIEW: Lightning Network Monetized APIs & Microservices (L402 / LSAT) */}
+        {activeView === 'lightning' && (
+          <LightningMonetizedApiView />
+        )}
+
+        {/* VIEW: Private Solo Stratum Pool Server & Cluster Coordinator */}
+        {activeView === 'pool' && (
+          <PrivateSoloPoolView />
+        )}
+
         {/* VIEW 0: Petabyte Stream Engine (DPDK / AF_XDP + SIMD AVX2 Core) */}
         {activeView === 'stream' && (
           <StreamEngineView />

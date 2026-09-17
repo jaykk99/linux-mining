@@ -196,35 +196,49 @@ class RealBtcStratumMiner:
 
             header_prefix = version_bin + prevhash_swapped + merkle_root_bin + ntime_bin + nbits_bin
 
+            # Pre-allocated 80-byte header buffer to eliminate string allocations & slices
+            hdr_buf = bytearray(80)
+            hdr_buf[:76] = header_prefix
+            pool_target_msb = self.pool_target >> 224
+
             nonce = 0
             while nonce < 0xffffffff and self.running and job == self.current_job:
-                nonce_bin = struct.pack("<I", nonce)
-                header = header_prefix + nonce_bin
+                # In-place byte casting of 32-bit nonce (little endian)
+                hdr_buf[76] = nonce & 0xFF
+                hdr_buf[77] = (nonce >> 8) & 0xFF
+                hdr_buf[78] = (nonce >> 16) & 0xFF
+                hdr_buf[79] = (nonce >> 24) & 0xFF
                 
-                hash_bytes = dbl_sha256(header)
-                hash_int = int.from_bytes(hash_bytes, byteorder="big")
-                full_hash_hex = binascii.hexlify(hash_bytes[::-1]).decode('ascii')
-                compressed_hash = compress_full_hash(full_hash_hex)
+                hash_bytes = dbl_sha256(hdr_buf)
+                
+                # Fast 1-cycle MSB rejection: avoid from_bytes(32) and string slicing for 99.999% of nonces
+                msb32 = (hash_bytes[31] << 24) | (hash_bytes[30] << 16) | (hash_bytes[29] << 8) | hash_bytes[28]
 
-                if hash_int <= self.pool_target:
-                    print(f"\\n[$$$] REAL BITCOIN SHARE FOUND! Nonce: {hex(nonce)} | Hash: {full_hash_hex}")
-                    self.send_rpc("mining.submit", [
-                        f"{self.wallet}.worker1",
-                        job["job_id"],
-                        extranonce2_hex,
-                        job["ntime"],
-                        format(nonce, '08x')
-                    ])
+                if msb32 <= pool_target_msb:
+                    hash_int = int.from_bytes(hash_bytes, byteorder="big")
+                    if hash_int <= self.pool_target:
+                        full_hash_hex = binascii.hexlify(hash_bytes[::-1]).decode('ascii')
+                        print(f"\\n[$$$] REAL BITCOIN SHARE FOUND! Nonce: {hex(nonce)} | Hash: {full_hash_hex}")
+                        self.send_rpc("mining.submit", [
+                            f"{self.wallet}.worker1",
+                            job["job_id"],
+                            extranonce2_hex,
+                            job["ntime"],
+                            format(nonce, '08x')
+                        ])
 
-                if hash_int <= job["network_target"]:
-                    print(f"\\n[🚨 JACKPOT! 🚨] SOLVED FULL BITCOIN NETWORK BLOCK! Reward: 3.125 BTC!")
+                        if hash_int <= job["network_target"]:
+                            print(f"\\n[🚨 JACKPOT! 🚨] SOLVED FULL BITCOIN NETWORK BLOCK! Reward: 3.125 BTC!")
 
                 self.hash_count += 1
                 nonce += 1
 
-                if self.hash_count % 50000 == 0:
+                # Cut down print frequency to once per 100,000 hashes to prevent I/O blocking
+                if (self.hash_count & 0x1FFFF) == 0:
                     elapsed = time.time() - self.start_time
                     khs = (self.hash_count / elapsed) / 1000 if elapsed > 0 else 0
+                    full_hash_hex = binascii.hexlify(hash_bytes[::-1]).decode('ascii')
+                    compressed_hash = compress_full_hash(full_hash_hex)
                     sys.stdout.write(f"\\r[-] Mining Nonce: {nonce:,} | Speed: {khs:.1f} kH/s | Latest Compressed: {compressed_hash[:8]}... ")
                     sys.stdout.flush()
 

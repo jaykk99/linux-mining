@@ -63,24 +63,38 @@ def worker_process(core_id: int, total_cores: int, job_queue: multiprocessing.Qu
             time.sleep(0.02)
             continue
 
-        batch_end = nonce + (50000 * nonce_step)
-        while nonce < batch_end:
-            hdr = pfx + pack("<I", nonce)
-            h_bytes = d_sha(hdr)
-            h_int = from_bytes(h_bytes, "big")
+        # Pre-allocate 80-byte header buffer to eliminate bytes concatenation & string slicing
+        hdr_buf = bytearray(80)
+        hdr_buf[:76] = pfx
+        batch_end = nonce + (100000 * nonce_step)
+        
+        # High 32-bit word target ceiling (99.999% of nonces are rejected here in 1 cycle)
+        target_msb32 = pool_target >> 224
 
-            # Early filter: only process if satisfies pool difficulty target
-            if h_int <= pool_target:
-                h_hex = binascii.hexlify(h_bytes[::-1]).decode()
-                share_queue.put({
-                    "core": core_id,
-                    "job_id": current_job_id,
-                    "en2": en2_hex,
-                    "ntime": ntime_hex,
-                    "nonce": format(nonce, "08x"),
-                    "hash": h_hex,
-                    "is_block": (h_int <= net_target)
-                })
+        while nonce < batch_end:
+            # Direct in-place byte casting without string slicing or object allocations
+            hdr_buf[76] = nonce & 0xFF
+            hdr_buf[77] = (nonce >> 8) & 0xFF
+            hdr_buf[78] = (nonce >> 16) & 0xFF
+            hdr_buf[79] = (nonce >> 24) & 0xFF
+
+            h_bytes = d_sha(hdr_buf)
+            # Ultra-fast early MSB filter: test top 32 bits before full 256-bit BigInt conversion
+            msb32 = (h_bytes[31] << 24) | (h_bytes[30] << 16) | (h_bytes[29] << 8) | h_bytes[28]
+
+            if msb32 <= target_msb32:
+                h_int = from_bytes(h_bytes, "big")
+                if h_int <= pool_target:
+                    h_hex = binascii.hexlify(h_bytes[::-1]).decode()
+                    share_queue.put({
+                        "core": core_id,
+                        "job_id": current_job_id,
+                        "en2": en2_hex,
+                        "ntime": ntime_hex,
+                        "nonce": format(nonce, "08x"),
+                        "hash": h_hex,
+                        "is_block": (h_int <= net_target)
+                    })
 
             nonce += nonce_step
             local_hashes += 1
