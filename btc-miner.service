@@ -1,0 +1,14 @@
+[Unit]
+Description=Linux BTC 8-to-4 Compressed Miner
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/btc-miner
+ExecStart=/usr/bin/python3 /root/btc-miner/compressed_miner.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

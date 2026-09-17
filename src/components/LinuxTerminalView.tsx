@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Terminal, Download, Copy, Check, Server, FileCode, Play, Trash2, ArrowRight } from 'lucide-react';
+import { Terminal, Download, Copy, Check, Server, FileCode, Play, Trash2, ArrowRight, Github, Coins } from 'lucide-react';
 import { TerminalLine } from '../types';
+import { REAL_BTC_MINER_SCRIPT } from '../realBtcMinerScript';
 
 interface LinuxTerminalViewProps {
   terminalLogs: TerminalLine[];
@@ -8,6 +9,10 @@ interface LinuxTerminalViewProps {
   isMining: boolean;
   onToggleMining: () => void;
 }
+
+const GITHUB_ONE_START_CMD = `git clone https://github.com/jayomer1234/btc-miner.git && ./btc-miner/start.sh`;
+const LOCAL_ONE_START_CMD = `./start.sh`;
+const GITHUB_COMPRESSED_CMD = `git clone https://github.com/jayomer1234/btc-miner.git && cd btc-miner && ./install.sh && python3 compressed_miner.py`;
 
 const PYTHON_SCRIPT_CODE = `#!/usr/bin/env python3
 """
@@ -115,6 +120,7 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
   onToggleMining,
 }) => {
   const [activeTab, setActiveTab] = useState<'console' | 'script' | 'linux-guide'>('console');
+  const [selectedScriptType, setSelectedScriptType] = useState<'real' | 'compressed'>('real');
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -125,8 +131,11 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
     }
   }, [terminalLogs, activeTab]);
 
+  const activeScriptCode = selectedScriptType === 'real' ? REAL_BTC_MINER_SCRIPT : PYTHON_SCRIPT_CODE;
+  const activeScriptFilename = selectedScriptType === 'real' ? 'real_btc_miner.py' : 'compressed_miner.py';
+
   const handleCopyScript = () => {
-    navigator.clipboard.writeText(PYTHON_SCRIPT_CODE);
+    navigator.clipboard.writeText(activeScriptCode);
     setCopiedScript(true);
     setTimeout(() => setCopiedScript(false), 2000);
   };
@@ -138,11 +147,11 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
   };
 
   const handleDownloadScript = () => {
-    const blob = new Blob([PYTHON_SCRIPT_CODE], { type: 'text/x-python;charset=utf-8' });
+    const blob = new Blob([activeScriptCode], { type: 'text/x-python;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'compressed_miner.py';
+    link.download = activeScriptFilename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -197,8 +206,8 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Server className="w-3.5 h-3.5" />
-            <span>Linux Deployment</span>
+            <Github className="w-3.5 h-3.5 text-emerald-400" />
+            <span>GitHub 1-Click Install</span>
           </button>
         </div>
       </div>
@@ -254,10 +263,32 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
         {/* TAB 2: Python Script Viewer */}
         {activeTab === 'script' && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-              <div className="text-xs text-slate-400 font-mono">
-                Filename: <span className="text-emerald-400 font-bold">compressed_miner.py</span> (Saved in project root)
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+              <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                <button
+                  onClick={() => setSelectedScriptType('real')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'real'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Coins className="w-3.5 h-3.5 text-amber-400" />
+                  <span>real_btc_miner.py (Stratum Pool)</span>
+                </button>
+                <button
+                  onClick={() => setSelectedScriptType('compressed')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'compressed'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <FileCode className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>compressed_miner.py (Benchmark)</span>
+                </button>
               </div>
+
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleCopyScript}
@@ -271,13 +302,13 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
                   className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-semibold text-xs flex items-center gap-1.5 transition cursor-pointer shadow"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Download .py</span>
+                  <span>Download {activeScriptFilename}</span>
                 </button>
               </div>
             </div>
 
-            <pre className="p-4 bg-slate-950 rounded-lg border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto leading-relaxed">
-              {PYTHON_SCRIPT_CODE}
+            <pre className="p-4 bg-slate-950 rounded-lg border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto leading-relaxed max-h-[420px]">
+              {activeScriptCode}
             </pre>
           </div>
         )}
@@ -285,14 +316,72 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
         {/* TAB 3: Linux Deployment & Terminal Instructions */}
         {activeTab === 'linux-guide' && (
           <div className="space-y-4 text-xs">
+            {/* Option 1: 1-Start Real Bitcoin Stratum Pool Mining */}
+            <div className="bg-gradient-to-r from-amber-950/40 via-slate-950 to-slate-950 p-4 rounded-xl border-2 border-amber-500/40 shadow-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">
+                    <Github className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white">1-Start Command: Real Bitcoin Pool Miner</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">1-Command Start</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">Single copy & paste command to clone, set up, and start live Stratum Bitcoin pool mining:</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCopyCommand(GITHUB_ONE_START_CMD)}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs flex items-center gap-1.5 transition shadow cursor-pointer"
+                >
+                  {copiedCmd ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedCmd ? 'Copied!' : 'Copy 1-Start Command'}
+                </button>
+              </div>
+
+              <div className="bg-slate-900/90 p-3 rounded-lg border border-amber-500/30 font-mono text-amber-300 text-xs flex items-center justify-between overflow-x-auto select-all">
+                <code>{GITHUB_ONE_START_CMD}</code>
+              </div>
+              <div className="mt-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between text-[11px] text-slate-400 gap-2">
+                <span>Already cloned or in repo folder? Just run: <code className="text-amber-300 bg-slate-900 px-1.5 py-0.5 rounded font-mono select-all">{LOCAL_ONE_START_CMD}</code></span>
+                <span className="text-amber-400/90 font-medium">Auto-connects to live solo pool & starts hashing</span>
+              </div>
+            </div>
+
+            {/* Option 2: Local 8-to-4 Compression Benchmark */}
+            <div className="bg-gradient-to-r from-emerald-950/40 via-slate-950 to-slate-950 p-4 rounded-xl border border-emerald-500/30 shadow">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                    <FileCode className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-white">Mode 2: Local 8-to-4 Compression Benchmark</h4>
+                    <p className="text-[11px] text-slate-400">Runs offline search testing the bitwise XOR folding logic:</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCopyCommand(GITHUB_COMPRESSED_CMD)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center gap-1.5 transition shadow cursor-pointer border border-slate-700"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Benchmark</span>
+                </button>
+              </div>
+
+              <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800 font-mono text-emerald-300 text-xs flex items-center justify-between overflow-x-auto select-all">
+                <code>{GITHUB_COMPRESSED_CMD}</code>
+              </div>
+            </div>
+
             <div className="bg-slate-950 p-3.5 rounded-lg border border-slate-800">
               <h4 className="text-sm font-semibold text-white mb-1 flex items-center gap-2">
                 <Server className="w-4 h-4 text-emerald-400" />
                 Step-by-Step Linux Terminal Execution
               </h4>
               <p className="text-slate-400 leading-relaxed">
-                Follow these exact commands to run this 8-to-4 lossy compression miner on any Linux distribution
-                (Ubuntu, Debian, Fedora, Arch, CentOS, or Raspberry Pi OS).
+                Alternatively, if you prefer running individual commands manually on Ubuntu, Debian, Fedora, Arch, or CentOS:
               </p>
             </div>
 
