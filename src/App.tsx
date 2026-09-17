@@ -17,9 +17,10 @@ import { FoldingVisualizer } from './components/FoldingVisualizer';
 import { LinuxTerminalView } from './components/LinuxTerminalView';
 import { MinedBlocksList } from './components/MinedBlocksList';
 import { CustomHashInspector } from './components/CustomHashInspector';
+import { StreamEngineView } from './components/StreamEngineView';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'miner' | 'terminal' | 'blocks' | 'math'>('miner');
+  const [activeView, setActiveView] = useState<'miner' | 'terminal' | 'stream' | 'blocks' | 'math'>('stream');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [pauseOnMatch, setPauseOnMatch] = useState(false);
 
@@ -255,6 +256,21 @@ export default function App() {
           {/* Navigation Tabs */}
           <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs w-full sm:w-auto overflow-x-auto">
             <button
+              onClick={() => setActiveView('stream')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeView === 'stream'
+                  ? 'bg-slate-800 text-cyan-300 shadow-sm border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Petabyte Stream Engine</span>
+              <span className="bg-cyan-500/20 text-cyan-300 text-[9px] font-mono px-1 rounded border border-cyan-500/30">
+                DPDK / AVX2
+              </span>
+            </button>
+
+            <button
               onClick={() => setActiveView('miner')}
               className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeView === 'miner'
@@ -321,6 +337,11 @@ export default function App() {
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* VIEW 0: Petabyte Stream Engine (DPDK / AF_XDP + SIMD AVX2 Core) */}
+        {activeView === 'stream' && (
+          <StreamEngineView />
+        )}
+
         {/* VIEW 1: Miner Dashboard & Folding Inspector */}
         {activeView === 'miner' && (
           <>

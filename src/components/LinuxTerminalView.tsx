@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Terminal, Download, Copy, Check, Server, FileCode, Play, Trash2, ArrowRight, Github, Coins, Zap, ShieldAlert, Cpu } from 'lucide-react';
+import { Terminal, Download, Copy, Check, Server, FileCode, Play, Trash2, ArrowRight, Github, Coins, Zap, ShieldAlert, Cpu, Sparkles } from 'lucide-react';
 import { TerminalLine } from '../types';
 import { REAL_BTC_MINER_SCRIPT } from '../realBtcMinerScript';
 import { FAST_MINER_PY_SCRIPT, FAST_MINER_C_SCRIPT } from '../fastMinerScripts';
+import { STREAM_ENGINE_C_CODE, STREAM_ENGINE_PY_CODE, ALGEBRAIC_SOLVER_C_CODE, ALGEBRAIC_SOLVER_PY_CODE } from '../streamEngineScripts';
 
 interface LinuxTerminalViewProps {
   terminalLogs: TerminalLine[];
@@ -209,7 +210,7 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
   onToggleMining,
 }) => {
   const [activeTab, setActiveTab] = useState<'console' | 'script' | 'linux-guide'>('console');
-  const [selectedScriptType, setSelectedScriptType] = useState<'fast_py' | 'fast_c' | 'real' | 'compressed'>('fast_py');
+  const [selectedScriptType, setSelectedScriptType] = useState<'algebraic_c' | 'algebraic_py' | 'stream_c' | 'stream_py' | 'fast_py' | 'fast_c' | 'real' | 'compressed'>('algebraic_c');
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -220,9 +221,21 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
     }
   }, [terminalLogs, activeTab]);
 
-  let activeScriptCode = FAST_MINER_PY_SCRIPT;
-  let activeScriptFilename = 'fast_miner.py';
-  if (selectedScriptType === 'fast_c') {
+  let activeScriptCode = ALGEBRAIC_SOLVER_C_CODE;
+  let activeScriptFilename = 'algebraic_solver.c';
+  if (selectedScriptType === 'algebraic_py') {
+    activeScriptCode = ALGEBRAIC_SOLVER_PY_CODE;
+    activeScriptFilename = 'algebraic_solver.py';
+  } else if (selectedScriptType === 'stream_c') {
+    activeScriptCode = STREAM_ENGINE_C_CODE;
+    activeScriptFilename = 'stream_engine.c';
+  } else if (selectedScriptType === 'stream_py') {
+    activeScriptCode = STREAM_ENGINE_PY_CODE;
+    activeScriptFilename = 'stream_engine.py';
+  } else if (selectedScriptType === 'fast_py') {
+    activeScriptCode = FAST_MINER_PY_SCRIPT;
+    activeScriptFilename = 'fast_miner.py';
+  } else if (selectedScriptType === 'fast_c') {
     activeScriptCode = FAST_MINER_C_SCRIPT;
     activeScriptFilename = 'fast_miner.c';
   } else if (selectedScriptType === 'real') {
@@ -365,6 +378,50 @@ export const LinuxTerminalView: React.FC<LinuxTerminalViewProps> = ({
           <div className="space-y-3">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
               <div className="flex flex-wrap items-center gap-1.5 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                <button
+                  onClick={() => setSelectedScriptType('algebraic_c')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'algebraic_c'
+                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>algebraic_solver.c (Homomorphic)</span>
+                </button>
+                <button
+                  onClick={() => setSelectedScriptType('algebraic_py')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'algebraic_py'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>algebraic_solver.py (Implicit Stream)</span>
+                </button>
+                <button
+                  onClick={() => setSelectedScriptType('stream_c')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'stream_c'
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Cpu className="w-3.5 h-3.5 text-purple-400" />
+                  <span>stream_engine.c (AVX2 Engine)</span>
+                </button>
+                <button
+                  onClick={() => setSelectedScriptType('stream_py')}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    selectedScriptType === 'stream_py'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <FileCode className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>stream_engine.py (Multiprocessing)</span>
+                </button>
                 <button
                   onClick={() => setSelectedScriptType('fast_py')}
                   className={`px-2.5 py-1 rounded text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
