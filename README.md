@@ -90,10 +90,15 @@ python3 miner.py
 
 ---
 
-## Why did GitHub ask for a Username and Password?
-When you run `git clone`:
-- GitHub **ONLY** asks for a username/password if the repository does not exist on GitHub yet, OR if the repository is set to **Private**.
-- If you want to use `git clone`, simply make sure your GitHub repository at `https://github.com/jayomer1234/btc-miner` is created and set to **Public**. Public repositories never require entering a username or password.
+## Cloning This Repo
+This repository is public, so cloning needs no login or password:
+
+```bash
+git clone https://github.com/jaykk99/linux-mining.git
+cd linux-mining
+```
+
+If GitHub ever prompts for a username/password on a `git clone`, it means the repository URL is wrong or the repo is private — double-check the URL above.
 
 ---
 
