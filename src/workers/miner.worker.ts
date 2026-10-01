@@ -132,6 +132,12 @@ let headerTemplate = 'BLOCK_DATA_JAY_OMER_LINUX_NODE_2026';
 let targetPattern = '1122';
 let currentNonce = 0;
 let startTime = 0;
+
+// Keep only hex chars, max 8 — an empty result means "no target", never matches.
+function sanitizePattern(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return raw.replace(/[^0-9a-fA-F]/g, '').toLowerCase().slice(0, 8);
+}
 let lastReportTime = 0;
 let lastReportNonce = 0;
 let pauseOnMatch = false;
@@ -186,15 +192,17 @@ function mineLoop() {
 
     // Fast check first 16 bits / 4 hex chars in 1 CPU operation
     // targetPattern: "1122" -> int: 0x1122
+    // An empty pattern can never match — without this guard every nonce
+    // would report a match and flood the UI.
     let matched = false;
-    if (targetLen <= 4) {
-      const targetInt = parseInt(targetPattern.padEnd(4, '0'), 16);
-      const mask = 0xffff >>> ((4 - targetLen) * 4);
+    const cleanPattern = targetPattern.toLowerCase();
+    if (targetLen > 0 && targetLen <= 4) {
+      const targetInt = parseInt(cleanPattern.padEnd(4, '0'), 16);
       const shift = (4 - targetLen) * 4;
       matched = ((folded[0] >>> shift) === (targetInt >>> shift));
-    } else {
+    } else if (targetLen > 4) {
       const compHex = foldedWordsToHex(folded);
-      matched = compHex.startsWith(targetPattern.toLowerCase());
+      matched = compHex.startsWith(cleanPattern);
     }
 
     if (matched) {
@@ -270,7 +278,7 @@ self.onmessage = (event) => {
     case 'START':
       if (payload) {
         if (payload.headerTemplate) headerTemplate = payload.headerTemplate;
-        if (payload.targetPattern) targetPattern = payload.targetPattern;
+        if (typeof payload.targetPattern === 'string') targetPattern = sanitizePattern(payload.targetPattern);
         if (typeof payload.nonce === 'number') currentNonce = payload.nonce;
         if (typeof payload.pauseOnMatch === 'boolean') pauseOnMatch = payload.pauseOnMatch;
       }
@@ -307,7 +315,7 @@ self.onmessage = (event) => {
 
     case 'UPDATE_CONFIG':
       if (payload.headerTemplate) headerTemplate = payload.headerTemplate;
-      if (payload.targetPattern) targetPattern = payload.targetPattern;
+      if (typeof payload.targetPattern === 'string') targetPattern = sanitizePattern(payload.targetPattern);
       if (typeof payload.pauseOnMatch === 'boolean') pauseOnMatch = payload.pauseOnMatch;
       updatePrefixBuffer();
       break;

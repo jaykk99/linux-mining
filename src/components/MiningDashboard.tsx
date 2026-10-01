@@ -1,11 +1,14 @@
 import React from 'react';
 import { Play, Pause, RotateCcw, Cpu, Zap, Clock, Trophy, Hash } from 'lucide-react';
 import { MiningStats, MinerConfig } from '../types';
+import { HashrateChart, HashSample } from './HashrateChart';
+import { RigStatus } from './RigStatus';
 
 interface MiningDashboardProps {
   stats: MiningStats;
   config: MinerConfig;
   pauseOnMatch: boolean;
+  hashHistory: HashSample[];
   onToggleMining: () => void;
   onReset: () => void;
   onConfigChange: (newConfig: Partial<MinerConfig>) => void;
@@ -16,11 +19,13 @@ export const MiningDashboard: React.FC<MiningDashboardProps> = ({
   stats,
   config,
   pauseOnMatch,
+  hashHistory,
   onToggleMining,
   onReset,
   onConfigChange,
   onTogglePauseOnMatch,
 }) => {
+  const patternValid = /^[0-9a-fA-F]{1,8}$/.test(config.targetPattern);
   const formatHashRate = (rate: number) => {
     if (rate >= 1_000_000) return `${(rate / 1_000_000).toFixed(2)} MH/s`;
     if (rate >= 1_000) return `${(rate / 1_000).toFixed(2)} kH/s`;
@@ -70,10 +75,14 @@ export const MiningDashboard: React.FC<MiningDashboardProps> = ({
           <button
             id="toggle-mining-btn"
             onClick={onToggleMining}
-            className={`flex-1 md:flex-initial px-5 py-2.5 rounded-lg font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer shadow-md ${
-              stats.isMining
-                ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold shadow-amber-500/20'
-                : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold shadow-emerald-500/20'
+            disabled={!stats.isMining && !patternValid}
+            title={!stats.isMining && !patternValid ? 'Enter a 1-8 character hex target pattern first' : undefined}
+            className={`flex-1 md:flex-initial px-5 py-2.5 rounded-lg font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md ${
+              !stats.isMining && !patternValid
+                ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                : stats.isMining
+                  ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold shadow-amber-500/20 cursor-pointer'
+                  : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold shadow-emerald-500/20 cursor-pointer'
             }`}
           >
             {stats.isMining ? (
@@ -161,6 +170,48 @@ export const MiningDashboard: React.FC<MiningDashboardProps> = ({
         </div>
       </div>
 
+      {/* Hashrate history (real recorded samples) + rig status */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5 my-5">
+        <HashrateChart samples={hashHistory} isMining={stats.isMining} />
+        <div className="bg-slate-950/60 border border-slate-800/90 rounded-lg p-3.5">
+          <div className="text-xs text-slate-400 mb-2">Session Summary</div>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+            <div>
+              <dt className="text-slate-500 text-[11px]">Hashes tested</dt>
+              <dd className="font-mono text-cyan-300 font-semibold">{stats.nonce.toLocaleString()}</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500 text-[11px]">Matches found</dt>
+              <dd className="font-mono text-emerald-300 font-semibold">{stats.totalMatches}</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500 text-[11px]">Elapsed</dt>
+              <dd className="font-mono text-indigo-300">{formatElapsed(stats.elapsedSec)}</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500 text-[11px]">Current rate</dt>
+              <dd className="font-mono text-amber-300">{formatHashRate(stats.hashRate)}</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500 text-[11px]">Target pattern</dt>
+              <dd className="font-mono text-emerald-300">"{config.targetPattern || '—'}"</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500 text-[11px]">Engine</dt>
+              <dd className="font-mono text-slate-300">Web Worker · SHA-256 (JS)</dd>
+            </div>
+          </dl>
+          <p className="text-[11px] text-slate-500 mt-3">
+            This is the in-browser 8-to-4 folding demo. Real pool mining runs on a
+            Linux rig — see rig status below.
+          </p>
+        </div>
+      </div>
+
+      <div className="mb-5">
+        <RigStatus />
+      </div>
+
       {/* Configuration & Parameter Adjustments */}
       <div className="bg-slate-950/40 border border-slate-800 rounded-lg p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
@@ -199,6 +250,11 @@ export const MiningDashboard: React.FC<MiningDashboardProps> = ({
               />
               <Hash className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-3" />
             </div>
+            {!patternValid && (
+              <p className="text-[11px] text-amber-400 mt-1">
+                Target must be 1–8 hex characters (0-9, a-f) to start the miner.
+              </p>
+            )}
           </div>
 
           <div className="md:col-span-3 flex items-center h-10">

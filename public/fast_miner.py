@@ -103,16 +103,72 @@ def worker_process(core_id: int, total_cores: int, job_queue: multiprocessing.Qu
         local_hashes = 0
 
 
+def parse_pool_arg(pool_arg: str):
+    """Parse 'host:port' (or bare host); exits with a clear error on bad input."""
+    if not pool_arg or not pool_arg.strip():
+        print("[✗] Pool argument is empty.", file=sys.stderr)
+        sys.exit(2)
+    s = pool_arg.strip()
+    parts = s.rsplit(":", 1)
+    host = parts[0].strip()
+    if len(parts) > 1:
+        try:
+            port = int(parts[1])
+        except ValueError:
+            print(f"[✗] Pool port is not a number: {parts[1]!r} (from {pool_arg!r})", file=sys.stderr)
+            sys.exit(2)
+    else:
+        port = DEFAULT_POOL_PORT
+    if not host:
+        print(f"[✗] Pool host is empty (from {pool_arg!r})", file=sys.stderr)
+        sys.exit(2)
+    if not 1 <= port <= 65535:
+        print(f"[✗] Pool port out of range (1-65535): {port}", file=sys.stderr)
+        sys.exit(2)
+    return host, port
+
+
+def parse_subscribe_response(raw_line: str):
+    """Validate the pool's mining.subscribe reply; exits with a clear error
+    instead of an IndexError traceback when the pool rejects us."""
+    try:
+        msg = json.loads(raw_line)
+    except json.JSONDecodeError as e:
+        print(f"[✗] Pool sent a non-JSON subscribe reply: {e}", file=sys.stderr)
+        sys.exit(1)
+    if isinstance(msg.get("error"), list) and msg["error"][0] is not None:
+        print(f"[✗] Pool rejected subscribe: {msg['error']}", file=sys.stderr)
+        sys.exit(1)
+    result = msg.get("result")
+    if not isinstance(result, list) or len(result) < 3:
+        print(f"[✗] Unexpected subscribe reply from pool: {raw_line[:200]}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        extranonce1 = result[1]
+        extranonce2_size = int(result[2])
+    except (TypeError, ValueError) as e:
+        print(f"[✗] Bad extranonce fields in subscribe reply: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not extranonce1 or extranonce2_size <= 0:
+        print(f"[✗] Pool returned empty extranonce1/size: {result[1]!r}/{result[2]!r}", file=sys.stderr)
+        sys.exit(1)
+    return extranonce1, extranonce2_size
+
+
 def main():
     wallet = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BTC_WALLET", DEFAULT_WALLET)
+    if not wallet or not wallet.strip():
+        print("[✗] Wallet address is empty.", file=sys.stderr)
+        sys.exit(2)
+    wallet = wallet.strip()
+
     pool_host = DEFAULT_POOL_HOST
     pool_port = DEFAULT_POOL_PORT
 
     if len(sys.argv) > 2:
-        parts = sys.argv[2].split(":")
-        pool_host = parts[0]
-        if len(parts) > 1:
-            pool_port = int(parts[1])
+        pool_host, pool_port = parse_pool_arg(sys.argv[2])
+    elif os.environ.get("BTC_POOL"):
+        pool_host, pool_port = parse_pool_arg(os.environ["BTC_POOL"])
 
     cpu_cores = os.cpu_count() or 4
 
@@ -136,10 +192,8 @@ def main():
 
     # 1. Stratum Subscribe
     sock.sendall(b'{"id":1,"method":"mining.subscribe","params":["FastMultiCore/2.0"]}\n')
-    sub_resp = json.loads(sock.recv(4096).decode().split("\n")[0])
-    sub_res = sub_resp.get("result", [])
-    extranonce1 = sub_res[1]
-    extranonce2_size = int(sub_res[2])
+    first_line = sock.recv(4096).decode().split("\n")[0]
+    extranonce1, extranonce2_size = parse_subscribe_response(first_line)
     print(f"[✓] Stratum Subscribed (ExtraNonce1: {extranonce1}, Size: {extranonce2_size})")
 
     # 2. Stratum Authorize
@@ -180,7 +234,11 @@ def main():
                         line, buf = buf.split("\n", 1)
                         if not line.strip():
                             continue
-                        msg = json.loads(line)
+                        try:
+                            msg = json.loads(line)
+                        except json.JSONDecodeError:
+                            print(f"\n[!] Dropping malformed pool message (not JSON): {line[:120]}")
+                            continue
 
                         if msg.get("method") == "mining.set_difficulty":
                             pool_difficulty = float(msg["params"][0])
@@ -188,7 +246,10 @@ def main():
                             print(f"\n[*] Pool updated difficulty to: {pool_difficulty}")
 
                         elif msg.get("method") == "mining.notify":
-                            p = msg["params"]
+                            p = msg.get("params") or []
+                            if len(p) < 9:
+                                print(f"\n[!] Malformed mining.notify (expected 9 params, got {len(p)}); ignoring")
+                                continue
                             job_id = p[0]
                             prev_hash = p[1]
                             coinb1 = p[2]

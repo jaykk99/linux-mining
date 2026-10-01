@@ -32,8 +32,9 @@ else
     echo -e "${GREEN}[✓] Found: ${PYTHON_VER}${NC}"
 fi
 
-# Make miners executable
-chmod +x compressed_miner.py real_btc_miner.py
+# Make miners executable (fresh clones often lose the exec bit)
+chmod +x compressed_miner.py real_btc_miner.py fast_miner.py quick_miner.py \
+         stream_engine.py algebraic_solver.py preflight.py start.sh
 
 echo -e "\n${GREEN}[✓] Installation complete!${NC}"
 echo -e "\n${CYAN}Choose your mining mode:${NC}"

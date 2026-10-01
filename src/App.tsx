@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { MiningStats, MinerConfig, MinedBlock, TerminalLine } from './types';
 import { MiningDashboard } from './components/MiningDashboard';
+import type { HashSample } from './components/HashrateChart';
 import { FoldingVisualizer } from './components/FoldingVisualizer';
 import { LinuxTerminalView } from './components/LinuxTerminalView';
 import { MinedBlocksList } from './components/MinedBlocksList';
@@ -49,6 +50,8 @@ export default function App() {
 
   const [minedBlocks, setMinedBlocks] = useState<MinedBlock[]>([]);
   const [selectedBlockForInspection, setSelectedBlockForInspection] = useState<MinedBlock | null>(null);
+  // Real recorded hashrate samples (from worker PROGRESS events). Empty until the miner runs.
+  const [hashHistory, setHashHistory] = useState<HashSample[]>([]);
   const [terminalLogs, setTerminalLogs] = useState<TerminalLine[]>([
     {
       id: 'init-1',
@@ -71,6 +74,7 @@ export default function App() {
   ]);
 
   const workerRef = useRef<Worker | null>(null);
+  const isMiningRef = useRef(false);
 
   const playSuccessChime = useCallback(() => {
     if (!soundEnabled) return;
@@ -116,6 +120,7 @@ export default function App() {
         const { type, payload, isMining } = event.data;
 
         if (type === 'STATUS_CHANGED') {
+          isMiningRef.current = !!isMining;
           setStats((s) => ({ ...s, isMining: !!isMining }));
         } else if (type === 'PROGRESS') {
           setStats((prev) => ({
@@ -126,6 +131,16 @@ export default function App() {
             currentFullHash: payload.currentFullHash || prev.currentFullHash,
             currentCompressedHash: payload.currentCompressedHash || prev.currentCompressedHash,
           }));
+
+          // Record a real hashrate sample for the history chart (only while mining)
+          if (isMiningRef.current && payload.nonce > 0 && typeof payload.hashRate === 'number') {
+            setHashHistory((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && payload.nonce <= last.nonceAt) return prev; // ignore stale/duplicate
+              const next = [...prev, { t: Date.now(), rate: payload.hashRate, nonceAt: payload.nonce }];
+              return next.length > 180 ? next.slice(next.length - 180) : next;
+            });
+          }
 
           // Periodic terminal log mirroring Python script output
           if (payload.nonce > 0 && payload.nonce % 25000 < 1000) {
@@ -179,14 +194,19 @@ export default function App() {
       workerRef.current.postMessage({ type: 'PAUSE' });
       addTerminalLog('[*] Mining paused by user.', 'warn');
     } else {
+      const pattern = config.targetPattern.trim().toLowerCase();
+      if (!pattern || !/^[0-9a-f]{1,8}$/.test(pattern)) {
+        addTerminalLog('[!] Cannot start: target pattern must be 1-8 hex characters.', 'warn');
+        return;
+      }
       addTerminalLog(`[*] Starting 8-to-4 Compression Linux Miner...`, 'info');
-      addTerminalLog(`[*] Target Compressed Pattern: ${config.targetPattern}`, 'info');
+      addTerminalLog(`[*] Target Compressed Pattern: ${pattern}`, 'info');
       addTerminalLog(`[*] Block Template: ${config.headerTemplate}`, 'dim');
       workerRef.current.postMessage({
         type: 'START',
         payload: {
           headerTemplate: config.headerTemplate,
-          targetPattern: config.targetPattern,
+          targetPattern: pattern,
           nonce: stats.nonce,
           pauseOnMatch,
         },
@@ -197,6 +217,7 @@ export default function App() {
   const resetMiner = () => {
     if (!workerRef.current) return;
     workerRef.current.postMessage({ type: 'RESET' });
+    setHashHistory([]);
     addTerminalLog('[*] Miner state and nonce counter reset to 0.', 'warn');
   };
 
@@ -412,6 +433,7 @@ export default function App() {
               stats={stats}
               config={config}
               pauseOnMatch={pauseOnMatch}
+              hashHistory={hashHistory}
               onToggleMining={toggleMining}
               onReset={resetMiner}
               onConfigChange={handleConfigChange}

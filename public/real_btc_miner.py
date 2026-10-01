@@ -119,11 +119,18 @@ class RealBtcStratumMiner:
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
                     line = line.strip()
-                    if line:
+                    if not line:
+                        continue
+                    try:
                         self.handle_message(json.loads(line))
+                    except json.JSONDecodeError as e:
+                        print(f"[!] Dropping malformed pool message (not JSON): {e}")
+                    except Exception as e:
+                        # A bad message must never kill the whole mining loop
+                        print(f"[!] Error handling pool message: {e}")
             except socket.timeout:
                 continue
-            except Exception as e:
+            except (ConnectionError, OSError) as e:
                 print(f"[!] Socket error: {e}")
                 break
 
@@ -134,8 +141,17 @@ class RealBtcStratumMiner:
         if method == "mining.notify":
             # Live Bitcoin block notification directly from Bitcoin blockchain
             # [job_id, prevhash, coinb1, coinb2, merkle_branch, version, nbits, ntime, clean_jobs]
-            job_id, prevhash, coinb1, coinb2, merkle_branch, version, nbits, ntime, clean_jobs = params
-            network_target = target_from_bits(nbits)
+            try:
+                (job_id, prevhash, coinb1, coinb2, merkle_branch,
+                 version, nbits, ntime, clean_jobs) = params
+            except (ValueError, TypeError) as e:
+                print(f"[!] Malformed mining.notify from pool (expected 9 params): {e}")
+                return
+            try:
+                network_target = target_from_bits(nbits)
+            except (ValueError, TypeError) as e:
+                print(f"[!] Bad nbits in mining.notify ({nbits!r}): {e}")
+                return
 
             self.current_job = {
                 "job_id": job_id,
@@ -254,6 +270,32 @@ class RealBtcStratumMiner:
 
             extranonce2 += 1
 
+def parse_pool_arg(pool_arg: str):
+    """Parse 'host:port' (or bare host) into (host, port); exits with a clear
+    error message instead of an unhandled traceback on bad input."""
+    if not pool_arg or not pool_arg.strip():
+        print("[✗] Pool argument is empty.", file=sys.stderr)
+        sys.exit(2)
+    s = pool_arg.strip()
+    if ":" in s:
+        h, p = s.rsplit(":", 1)
+        host = h.strip()
+        try:
+            port = int(p)
+        except ValueError:
+            print(f"[✗] Pool port is not a number: {p!r} (from {pool_arg!r})", file=sys.stderr)
+            sys.exit(2)
+    else:
+        host, port = s, DEFAULT_POOL_PORT
+    if not host:
+        print(f"[✗] Pool host is empty (from {pool_arg!r})", file=sys.stderr)
+        sys.exit(2)
+    if not 1 <= port <= 65535:
+        print(f"[✗] Pool port out of range (1-65535): {port}", file=sys.stderr)
+        sys.exit(2)
+    return host, port
+
+
 def main():
     import os
     print("=" * 65)
@@ -266,26 +308,16 @@ def main():
         wallet = sys.argv[1].strip()
     elif os.environ.get("BTC_WALLET"):
         wallet = os.environ.get("BTC_WALLET").strip()
+    if not wallet:
+        print("[✗] Wallet address is empty.", file=sys.stderr)
+        sys.exit(2)
 
-    # 2. Parse Pool Host/Port
-    host = DEFAULT_POOL_HOST
-    port = DEFAULT_POOL_PORT
+    # 2. Parse Pool Host/Port (validated — no silent misconfig)
+    host, port = DEFAULT_POOL_HOST, DEFAULT_POOL_PORT
     if len(sys.argv) > 2:
-        pool_arg = sys.argv[2].strip()
-        if ":" in pool_arg:
-            h, p = pool_arg.split(":")
-            host = h
-            port = int(p)
-        else:
-            host = pool_arg
+        host, port = parse_pool_arg(sys.argv[2])
     elif os.environ.get("BTC_POOL"):
-        pool_env = os.environ.get("BTC_POOL").strip()
-        if ":" in pool_env:
-            h, p = pool_env.split(":")
-            host = h
-            port = int(p)
-        else:
-            host = pool_env
+        host, port = parse_pool_arg(os.environ.get("BTC_POOL"))
 
     target_pattern = os.environ.get("TARGET_PATTERN", "1122")
     if len(sys.argv) > 3:

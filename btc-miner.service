@@ -1,14 +1,31 @@
 [Unit]
 Description=Linux BTC 8-to-4 Compressed Miner
-After=network.target
+Documentation=https://github.com/jaykk99/linux-mining
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/root/btc-miner
-ExecStart=/usr/bin/python3 /root/btc-miner/compressed_miner.py
-Restart=always
-RestartSec=5
+# Adjust User/WorkingDirectory to where you cloned the repo.
+# Do NOT run as root unless you have a reason to — create a dedicated user instead:
+#   sudo useradd -r -m -s /usr/sbin/nologin btcminer
+User=btcminer
+WorkingDirectory=/home/btcminer/linux-mining
+# Optional overrides (create the file to use it; the leading "-" makes it optional):
+#   BTC_WALLET=bc1q...      payout wallet
+#   BTC_POOL=host:port      stratum pool
+#   TARGET_PATTERN=1122     8-to-4 target pattern
+EnvironmentFile=-/etc/btc-miner.env
+ExecStart=/usr/bin/python3 /home/btcminer/linux-mining/real_btc_miner.py
+# Prefer the fast C engine instead:
+# ExecStart=/home/btcminer/linux-mining/start.sh
+Restart=on-failure
+RestartSec=10
+# Hardening: the miner only needs outbound TCP to the pool
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

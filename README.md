@@ -102,6 +102,21 @@ If GitHub ever prompts for a username/password on a `git clone`, it means the re
 
 ---
 
+## Pre-Flight Checks (Before You Mine)
+
+Run this first — it validates Python, the C toolchain, all miner scripts, CPU/GPU,
+your wallet format, and your pool/pattern config, and exits before anything mines:
+
+```bash
+python3 preflight.py --wallet <your-btc-address>
+# or via the launcher (runs the fast local checks automatically before mining):
+./start.sh --check
+```
+
+Pool reachability (a real TCP check) is opt-in only: `python3 preflight.py --include-pool`
+
+Common env overrides: `BTC_WALLET`, `BTC_POOL` (host:port), `TARGET_PATTERN`.
+
 ## Mining Options
 
 ### Option 1: Real Bitcoin Stratum Pool Mining (`real_btc_miner.py`)
@@ -162,21 +177,33 @@ Open `http://localhost:3000` in your browser.
 
 To keep the miner running in the background automatically across system reboots:
 
-1. Copy the systemd service file:
+1. Create a dedicated (non-root) user and clone the repo into its home:
+```bash
+sudo useradd -r -m -s /usr/sbin/nologin btcminer
+sudo -u btcminer git clone https://github.com/jaykk99/linux-mining.git /home/btcminer/linux-mining
+```
+
+2. Optional: set wallet/pool overrides in `/etc/btc-miner.env`:
+```bash
+BTC_WALLET=bc1q...
+BTC_POOL=solo.ckpool.org:3333
+TARGET_PATTERN=1122
+```
+
+3. Install and start the service:
 ```bash
 sudo cp btc-miner.service /etc/systemd/system/
 sudo systemctl daemon-reload
-```
-
-2. Enable and start the service:
-```bash
 sudo systemctl enable --now btc-miner.service
 ```
 
-3. Check miner logs live:
+4. Check miner logs live:
 ```bash
 journalctl -u btc-miner.service -f
 ```
+
+The service runs `real_btc_miner.py` (live Stratum). To use the fast C engine
+instead, uncomment the `start.sh` `ExecStart` line in `btc-miner.service`.
 
 ---
 

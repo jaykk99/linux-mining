@@ -197,7 +197,19 @@ int main(int argc, char* argv[]) {
 
     if (argc > 1) strncpy(global_wallet, argv[1], sizeof(global_wallet) - 1);
     if (argc > 2) host = argv[2];
-    if (argc > 3) port = atoi(argv[3]);
+    if (argc > 3) {
+        char *end = NULL;
+        long p = strtol(argv[3], &end, 10);
+        if (end == argv[3] || *end != '\0' || p < 1 || p > 65535) {
+            fprintf(stderr, "[✗] Invalid port: '%s' (must be 1-65535)\n", argv[3]);
+            return 2;
+        }
+        port = (int)p;
+    }
+    if (host == NULL || host[0] == '\0') {
+        fprintf(stderr, "[✗] Pool host is empty.\n");
+        return 2;
+    }
 
     long cores = sysconf(_SC_NPROCESSORS_ONLN);
     if (cores > 0) num_threads = (int)cores;
