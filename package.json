@@ -8,7 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/utils/validation.test.ts",
+    "test:py": "python3 -m unittest discover -s tests",
+    "preflight": "python3 preflight.py"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

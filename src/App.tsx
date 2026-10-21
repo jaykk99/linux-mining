@@ -25,9 +25,10 @@ import { StreamEngineView } from './components/StreamEngineView';
 import { PrivateSoloPoolView } from './components/PrivateSoloPoolView';
 import { LightningMonetizedApiView } from './components/LightningMonetizedApiView';
 import { LedgerSimulationView } from './components/LedgerSimulationView';
+import { RigConfigPanel } from './components/RigConfigPanel';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'lightning' | 'pool' | 'stream' | 'miner' | 'terminal' | 'blocks' | 'math' | 'ledger'>('ledger');
+  const [activeView, setActiveView] = useState<'lightning' | 'pool' | 'stream' | 'miner' | 'terminal' | 'blocks' | 'math' | 'ledger' | 'config'>('ledger');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [pauseOnMatch, setPauseOnMatch] = useState(false);
 
@@ -392,6 +393,18 @@ export default function App() {
               <span>Playground</span>
             </button>
 
+            <button
+              onClick={() => setActiveView('config')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeView === 'config'
+                  ? 'bg-slate-800 text-cyan-300 shadow-sm border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Rig Config</span>
+            </button>
+
             {/* Sound toggle */}
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
@@ -480,6 +493,9 @@ export default function App() {
             />
           </>
         )}
+
+        {/* VIEW 5: Rig Config */}
+        {activeView === 'config' && <RigConfigPanel />}
 
         {/* System & Architecture Info Footer */}
         <div className="pt-4 border-t border-slate-800/80 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-3 font-mono">

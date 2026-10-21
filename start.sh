@@ -48,7 +48,7 @@ fi
 
 if [ "${1:-}" = "--check" ]; then
     echo -e "${CYAN}[*] Running pre-flight checks (no mining will start)...${NC}"
-    exec python3 preflight.py --wallet "${BTC_WALLET:-}" --pool "${BTC_POOL:-solo.ckpool.org:3333}" --pattern "${TARGET_PATTERN:-1122}"
+    exec python3 preflight.py --wallet "${BTC_WALLET:-}" --pool "${BTC_POOL:-solo.ckpool.org:3333}" --pattern "${TARGET_PATTERN:-1122}" ${MINER_CONFIG:+--config "$MINER_CONFIG"}
 fi
 
 WALLET="${1:-${BTC_WALLET:-1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa}}"

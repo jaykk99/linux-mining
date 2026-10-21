@@ -17,7 +17,22 @@ Exit code: 0 = ready (warnings allowed), 1 = hard failure(s).
 
 Usage:
     python3 preflight.py [--wallet ADDR] [--pool host:port] [--include-pool] [--quiet]
+                        [--config miner-config.json]
+
+A JSON config file (--config) is validated against the miner config schema:
+    {"pool": "host:port", "wallet": "ADDR", "pattern": "1122",
+     "threads": 4, "engine": "python|c|auto"}
 """
+
+import argparse
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
 
 import argparse
 import os
@@ -241,6 +256,222 @@ def check_pattern(res, pattern):
         res.ok("Target pattern", f'"{p}" — ~1 in {odds:,} hashes')
 
 
+def check_disk_space(res, min_free_mb=256):
+    """Fail when the repo dir or /tmp has less than min_free_mb free."""
+    for label, path in (("repo dir", REPO_DIR), ("/tmp", tempfile.gettempdir())):
+        try:
+            free_mb = shutil.disk_usage(path).free // (1024 * 1024)
+        except OSError as e:
+            res.warn("Disk space", f"could not stat {label} ({path}): {e}")
+            continue
+        if free_mb < min_free_mb:
+            res.fail("Disk space", f"only {free_mb:,} MB free on {label} — need {min_free_mb:,} MB")
+        else:
+            res.ok("Disk space", f"{free_mb:,} MB free on {label}")
+
+
+def check_tmp_writable(res):
+    """The miners stage work files in /tmp — prove it is writable."""
+    tmpdir = tempfile.gettempdir()
+    try:
+        fd, path = tempfile.mkstemp(prefix="preflight-", dir=tmpdir)
+        with os.fdopen(fd, "w") as f:
+            f.write("ok")
+        os.unlink(path)
+        res.ok("Temp dir writable", tmpdir)
+    except OSError as e:
+        res.fail("Temp dir writable", f"cannot write to {tmpdir}: {e}")
+
+
+def check_fd_limit(res, minimum=4096):
+    """Warn when the file-descriptor limit is low (threaded miners)."""
+    try:
+        import resource
+        soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (ImportError, OSError, ValueError):
+        res.warn("FD limit", "could not read RLIMIT_NOFILE (non-POSIX host?)")
+        return
+    if soft < minimum:
+        res.warn("FD limit", f"soft limit is {soft} — raise with `ulimit -n {minimum}` for threaded miners")
+    else:
+        res.ok("FD limit", f"soft limit {soft}")
+
+
+def check_node_toolchain(res):
+    """Dashboard UI builds with vite — warn-only, mining does not need it."""
+    node = shutil.which("node")
+    npm = shutil.which("npm")
+    if not node:
+        res.warn("Node.js", "node not found — `npm run build` for the dashboard will not work")
+        return
+    res.ok("Node.js", node)
+    if not npm:
+        res.warn("npm", "npm not found — cannot install dashboard dependencies")
+    nm = os.path.join(REPO_DIR, "node_modules")
+    if os.path.isdir(nm):
+        res.ok("Dashboard deps", "node_modules present")
+    else:
+        res.warn("Dashboard deps", "node_modules missing — run `npm ci` before `npm run build`")
+
+
+def check_service_file(res, name="btc-miner.service"):
+    """Sanity-check the systemd unit: required sections + ExecStart."""
+    path = os.path.join(REPO_DIR, name)
+    if not os.path.isfile(path):
+        res.warn("Service file", f"{name} not found — skip systemd install")
+        return
+    sections = {}
+    current = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith(("#", ";")):
+                    continue
+                m = re.fullmatch(r"\[(.+)\]", line)
+                if m:
+                    current = m.group(1)
+                    sections.setdefault(current, {})
+                elif current and "=" in line:
+                    k, v = line.split("=", 1)
+                    sections[current][k.strip()] = v.strip()
+    except OSError as e:
+        res.fail("Service file", f"cannot read {name}: {e}")
+        return
+    problems = []
+    if "Unit" not in sections:
+        problems.append("missing [Unit]")
+    if "Service" not in sections:
+        problems.append("missing [Service]")
+    elif not sections["Service"].get("ExecStart"):
+        problems.append("[Service] has no ExecStart=")
+    if "Install" not in sections or not sections["Install"].get("WantedBy"):
+        problems.append("[Install] has no WantedBy=")
+    if problems:
+        res.fail("Service file", f"{name}: " + "; ".join(problems))
+    else:
+        res.ok("Service file", f"{name} parses ({len(sections)} sections)")
+
+
+# ---------------------------------------------------------------------------
+# Miner config schema validation (--config)
+# ---------------------------------------------------------------------------
+
+CONFIG_ENGINES = ("python", "c", "auto")
+
+
+def validate_threads(raw):
+    """Threads must be an int in 1..(2 * cpu_count)."""
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"threads must be an integer, got {raw!r}")
+    cap = max(1, (os.cpu_count() or 1) * 2)
+    if not 1 <= n <= cap:
+        raise ValueError(f"threads must be 1..{cap} on this host, got {n}")
+    return n
+
+
+def validate_wallet_strict(wallet):
+    """Wallet must be a plausible BTC address (unlike check_wallet, rejects)."""
+    w = (wallet or "").strip()
+    if not w:
+        raise ValueError("wallet is empty")
+    if w.startswith(("bc1q", "bc1p")):
+        if 14 <= len(w) <= 74 and re.fullmatch(r"[a-z0-9]+", w):
+            return w
+        raise ValueError("bech32 wallet has odd length/characters")
+    if w.startswith(("1", "3")):
+        if 26 <= len(w) <= 35 and all(c in BASE58_ALPHABET for c in w):
+            return w
+        raise ValueError("base58 wallet failed length/character sanity")
+    raise ValueError(f"unrecognized wallet address format: {w[:12]!r}…")
+
+
+def validate_pattern_strict(pattern):
+    p = (pattern or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{1,8}", p):
+        raise ValueError(f"pattern must be 1-8 hex chars, got {pattern!r}")
+    return p
+
+
+def validate_miner_config(data):
+    """Validate a miner config dict; returns the normalized config.
+
+    Raises ValueError listing every problem found.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("config must be a JSON object")
+    problems = []
+    cfg = {}
+
+    # pool (required)
+    try:
+        host, port = parse_pool(data.get("pool", ""))
+        cfg["pool"] = f"{host}:{port}"
+    except ValueError as e:
+        problems.append(f"pool: {e}")
+
+    # wallet (required)
+    try:
+        cfg["wallet"] = validate_wallet_strict(data.get("wallet", ""))
+    except ValueError as e:
+        problems.append(f"wallet: {e}")
+
+    # pattern (optional, default 1122)
+    try:
+        cfg["pattern"] = validate_pattern_strict(data.get("pattern", "1122"))
+    except ValueError as e:
+        problems.append(f"pattern: {e}")
+
+    # threads (optional, default = cpu count)
+    try:
+        cfg["threads"] = validate_threads(data.get("threads", os.cpu_count() or 1))
+    except ValueError as e:
+        problems.append(f"threads: {e}")
+
+    # engine (optional, default auto)
+    engine = str(data.get("engine", "auto")).strip().lower()
+    if engine not in CONFIG_ENGINES:
+        problems.append(f"engine must be one of {', '.join(CONFIG_ENGINES)}, got {engine!r}")
+    else:
+        cfg["engine"] = engine
+
+    unknown = sorted(set(data) - {"pool", "wallet", "pattern", "threads", "engine"})
+    if unknown:
+        problems.append(f"unknown config keys: {', '.join(unknown)}")
+
+    if problems:
+        raise ValueError("invalid miner config:\n  - " + "\n  - ".join(problems))
+    return cfg
+
+
+def load_miner_config(path):
+    """Read + validate a JSON miner config file. Raises ValueError."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise ValueError(f"config file not found: {path}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"config file is not valid JSON: {e}")
+    except OSError as e:
+        raise ValueError(f"cannot read config file {path}: {e}")
+    return validate_miner_config(data)
+
+
+def check_config(res, path):
+    if not path:
+        return
+    try:
+        cfg = load_miner_config(path)
+    except ValueError as e:
+        res.fail("Miner config", str(e))
+        return
+    res.ok("Miner config", f"valid — pool {cfg['pool']}, pattern {cfg['pattern']}, "
+                           f"{cfg['threads']} threads, engine {cfg['engine']}")
+
+
 def check_pool_reachable(res, host, port):
     """OPT-IN: opens a real TCP connection to the pool. Skipped by default."""
     try:
@@ -270,6 +501,8 @@ def main():
                     help="8-to-4 target pattern to validate (default: $TARGET_PATTERN or 1122)")
     ap.add_argument("--include-pool", action="store_true",
                     help="also perform a live TCP reachability check against the pool")
+    ap.add_argument("--config", default=os.environ.get("MINER_CONFIG", ""),
+                    help="validate a JSON miner config file (default: $MINER_CONFIG)")
     ap.add_argument("--quiet", action="store_true", help="only print failures/warnings + summary")
     args = ap.parse_args()
     QUIET = args.quiet
@@ -284,9 +517,15 @@ def main():
     check_scripts(res)
     check_c_toolchain(res)
     check_hardware(res)
+    check_disk_space(res)
+    check_tmp_writable(res)
+    check_fd_limit(res)
+    check_node_toolchain(res)
+    check_service_file(res)
     check_wallet(res, args.wallet)
     host, port = check_pool_config(res, args.pool)
     check_pattern(res, args.pattern)
+    check_config(res, args.config)
 
     if args.include_pool and host and port:
         check_pool_reachable(res, host, port)

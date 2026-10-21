@@ -117,6 +117,30 @@ Pool reachability (a real TCP check) is opt-in only: `python3 preflight.py --inc
 
 Common env overrides: `BTC_WALLET`, `BTC_POOL` (host:port), `TARGET_PATTERN`.
 
+Extra checks now included: free disk space (repo dir + /tmp), /tmp writability,
+file-descriptor limit, Node.js + dashboard deps presence, and systemd unit sanity
+for `btc-miner.service`.
+
+Validate a JSON miner config file (same schema the dashboard's Rig Config tab
+exports):
+
+```bash
+python3 preflight.py --config miner-config.json
+# {"pool": "host:port", "wallet": "ADDR", "pattern": "1122", "threads": 4, "engine": "python|c|auto"}
+```
+
+## Tests
+
+```bash
+npm test          # 18 UI validation tests (tsx + node:test)
+npm run test:py   # 43 preflight validation tests (stdlib unittest, no network)
+```
+
+`tests/test_preflight.py` covers pool parsing, wallet/pattern/threads validation,
+the full config schema, and the system checks. `src/utils/validation.test.ts`
+covers the same schema on the TypeScript side so the dashboard and preflight
+never disagree.
+
 ## Mining Options
 
 ### Option 1: Real Bitcoin Stratum Pool Mining (`real_btc_miner.py`)
